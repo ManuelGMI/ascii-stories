@@ -128,3 +128,21 @@ void main() {
   c *= 1.0 - u_scan * (1.0 - line);
   outColor = vec4(c, 1.0);
 }`;
+
+// Suavizado temporal: media exponencial entre el fotograma nuevo y el acumulado.
+export const FRAG_BLEND = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_new;
+uniform sampler2D u_prev;
+uniform vec2  u_size;
+uniform float u_k;
+
+out vec4 outColor;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_size;
+  vec3 n = textureLod(u_new, uv, 0.0).rgb;
+  vec3 p = textureLod(u_prev, uv, 0.0).rgb;
+  outColor = vec4(mix(n, p, u_k), 1.0);
+}`;

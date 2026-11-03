@@ -1,5 +1,5 @@
 import { buildAtlas, type Atlas } from './atlas';
-import { FRAG_ASCII, FRAG_POST, VERT } from './shaders';
+import { FRAG_ASCII, FRAG_BLEND, FRAG_POST, VERT } from './shaders';
 
 export interface Params {
   cell: number; // ancho de celda en px (a 1080 de ancho)
@@ -19,6 +19,7 @@ export interface Params {
   scanlines: number;
   scanPeriod: number;
   bloom: number;
+  smooth: number; // suavizado temporal (0 = off, hasta ~0.9)
 }
 
 export const OUT_W = 1080;
@@ -43,6 +44,7 @@ export const DEFAULTS: Params = {
   scanlines: 0.25,
   scanPeriod: 4,
   bloom: 0.6,
+  smooth: 0.5,
 };
 
 function hex(c: string): [number, number, number] {
@@ -83,16 +85,21 @@ export class Engine {
   private gl: WebGL2RenderingContext;
   private ascii: Program;
   private post: Program;
-  private srcTex: WebGLTexture;
+  private blend: Program;
+  private rawTex: WebGLTexture;
+  private rawW = 0;
+  private rawH = 0;
+  // Acumulador temporal (ping-pong) a tamaño de la fuente; es lo que lee la pasada ASCII.
+  private acc: WebGLTexture[] = [];
+  private accFbo: WebGLFramebuffer[] = [];
+  private cur = 0;
+  private hasAcc = false;
   private atlasTex: WebGLTexture;
   private fboTex: WebGLTexture;
   private fbo: WebGLFramebuffer;
   private vao: WebGLVertexArrayObject;
   private atlas: Atlas | null = null;
   private atlasCharset = '';
-  private srcW = 1;
-  private srcH = 1;
-  hasImage = false;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     canvas.width = OUT_W;
@@ -102,9 +109,13 @@ export class Engine {
     this.gl = gl;
     this.ascii = new Program(gl, FRAG_ASCII);
     this.post = new Program(gl, FRAG_POST);
+    this.blend = new Program(gl, FRAG_BLEND);
     this.vao = gl.createVertexArray()!;
 
-    this.srcTex = this.makeTex();
+    this.rawTex = this.makeTex();
+    this.setFilter(this.rawTex, false);
+    this.acc = [this.makeTex(), this.makeTex()];
+    this.accFbo = [gl.createFramebuffer()!, gl.createFramebuffer()!];
     this.atlasTex = this.makeTex();
     this.fboTex = this.makeTex();
     gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
@@ -132,17 +143,62 @@ export class Engine {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   }
 
-  setImage(src: TexImageSource & { width: number; height: number }) {
+  setImage(src: TexImageSource, w: number, h: number) {
+    this.ingest(src, w, h, 0, true);
+  }
+
+  /**
+   * Sube un fotograma nuevo y lo mezcla con el anterior (suavizado temporal).
+   * `reset` descarta la historia (cambio de medio, salto de tiempo, bucle).
+   */
+  ingest(src: TexImageSource, w: number, h: number, smooth: number, reset: boolean) {
     const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
+    if (w < 1 || h < 1) return;
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, src);
+
+    // Textura cruda
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.rawTex);
+    if (w === this.rawW && h === this.rawH) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, src);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, src);
+      this.rawW = w;
+      this.rawH = h;
+      for (let i = 0; i < 2; i++) {
+        gl.bindTexture(gl.TEXTURE_2D, this.acc[i]);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        this.setFilter(this.acc[i], true);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo[i]);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.acc[i], 0);
+      }
+      this.hasAcc = false;
+    }
+
+    // Mezcla con el acumulado anterior
+    const next = 1 - this.cur;
+    const k = reset || !this.hasAcc ? 0 : Math.min(Math.max(smooth, 0), 0.95);
+    gl.bindVertexArray(this.vao);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo[next]);
+    gl.viewport(0, 0, w, h);
+    const b = this.blend;
+    b.use();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.rawTex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.acc[this.cur]);
+    b.i('u_new', 0);
+    b.i('u_prev', 1);
+    b.v2('u_size', w, h);
+    b.f('u_k', k);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    this.cur = next;
+    this.hasAcc = true;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.acc[this.cur]);
     gl.generateMipmap(gl.TEXTURE_2D);
-    this.setFilter(this.srcTex, true);
-    this.srcW = src.width;
-    this.srcH = src.height;
-    this.hasImage = true;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   private ensureAtlas(charset: string) {
@@ -159,7 +215,7 @@ export class Engine {
   }
 
   render(p: Params) {
-    if (!this.hasImage) return;
+    if (!this.hasAcc) return;
     const gl = this.gl;
     this.ensureAtlas(p.charset);
     const cw = p.cell;
@@ -173,13 +229,13 @@ export class Engine {
     const a = this.ascii;
     a.use();
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
+    gl.bindTexture(gl.TEXTURE_2D, this.acc[this.cur]);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.atlasTex);
     a.i('u_src', 0);
     a.i('u_atlas', 1);
     a.v2('u_res', OUT_W, OUT_H);
-    a.v2('u_srcSize', this.srcW, this.srcH);
+    a.v2('u_srcSize', this.rawW, this.rawH);
     a.v2('u_cell', cw, ch);
     a.f('u_n', this.atlas!.rampCount);
     a.f('u_edgeStrength', p.edgeStrength);

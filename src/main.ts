@@ -2,6 +2,7 @@ import './style.css';
 import { CHARSETS } from './atlas';
 import { makeDemoImage } from './demo';
 import { DEFAULTS, Engine, type Params } from './engine';
+import { GifMedia, ImageMedia, VideoMedia, type Media } from './media';
 
 const canvas = document.getElementById('preview') as HTMLCanvasElement;
 const panel = document.getElementById('controls') as HTMLElement;
@@ -16,15 +17,8 @@ try {
 }
 
 const params: Params = { ...DEFAULTS };
-let queued = false;
-function redraw() {
-  if (queued) return;
-  queued = true;
-  requestAnimationFrame(() => {
-    queued = false;
-    engine.render(params);
-  });
-}
+let needRender = true;
+const redraw = () => { needRender = true; };
 
 // ---------- Construcción de controles ----------
 function section(title: string) {
@@ -95,9 +89,60 @@ function color(s: HTMLElement, label: string, key: 'monoColor' | 'bgColor') {
 const sImg = section('Imagen');
 const file = document.createElement('input');
 file.type = 'file';
-file.accept = 'image/png,image/jpeg,image/webp';
+file.accept = 'image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm';
 file.addEventListener('change', () => file.files?.[0] && loadFile(file.files[0]));
 sImg.appendChild(file);
+// Transporte (vídeo / GIF)
+const sTr = section('Reproducción');
+const transport = document.createElement('div');
+sTr.appendChild(transport);
+transport.className = 'transport';
+const btnPlay = document.createElement('button');
+const btnPrev = Object.assign(document.createElement('button'), { textContent: '◀︎ 1 fotograma' });
+const btnNext = Object.assign(document.createElement('button'), { textContent: '1 fotograma ▶︎' });
+const timeline = document.createElement('input');
+timeline.type = 'range';
+timeline.min = '0';
+timeline.max = '1000';
+timeline.value = '0';
+const timeLabel = document.createElement('span');
+timeLabel.className = 'val';
+const fpsSel = document.createElement('select');
+fpsSel.add(new Option('30 fps', '30'));
+fpsSel.add(new Option('60 fps', '60'));
+const stepRow = document.createElement('div');
+stepRow.className = 'two';
+stepRow.append(btnPrev, btnNext);
+transport.append(btnPlay, timeline, timeLabel, stepRow, fpsSel);
+let fps = 30;
+let scrubbing = false;
+fpsSel.addEventListener('change', () => (fps = Number(fpsSel.value)));
+btnPlay.addEventListener('click', () => {
+  if (!media) return;
+  media.playing ? media.pause() : media.play();
+  redraw();
+});
+btnPrev.addEventListener('click', () => media?.step(-1, fps));
+btnNext.addEventListener('click', () => media?.step(1, fps));
+timeline.addEventListener('pointerdown', () => (scrubbing = true));
+timeline.addEventListener('pointerup', () => (scrubbing = false));
+timeline.addEventListener('input', () => media?.seek((Number(timeline.value) / 1000) * media.duration));
+
+function fmt(t: number) {
+  const m = Math.floor(t / 60);
+  return `${m}:${(t - m * 60).toFixed(2).padStart(5, '0')}`;
+}
+function updateTransport() {
+  const animated = !!media && media.kind !== 'image';
+  transport.hidden = !animated;
+  sTr.hidden = !animated;
+  if (!media || !animated) return;
+  btnPlay.textContent = media.playing ? '❚❚ Pausa' : '▶︎ Reproducir';
+  if (!scrubbing) timeline.value = String((media.time / media.duration) * 1000);
+  timeLabel.textContent = `${fmt(media.time)} / ${fmt(media.duration)}`;
+}
+sTr.hidden = true;
+
 const btnPng = document.createElement('button');
 btnPng.textContent = 'Exportar PNG 1080×1920';
 btnPng.addEventListener('click', async () => {
@@ -163,29 +208,68 @@ slider(sFx, 'Scanlines', 'scanlines', 0, 1, 0.01);
 slider(sFx, 'Grosor scanline (px)', 'scanPeriod', 2, 16, 1);
 slider(sFx, 'Brillo CRT (bloom)', 'bloom', 0, 3, 0.01);
 
+const sVid = section('Vídeo / GIF');
+slider(sVid, 'Suavizado temporal (0 = off)', 'smooth', 0, 0.9, 0.01);
+
 const btnReset = document.createElement('button');
 btnReset.textContent = 'Restablecer';
 btnReset.addEventListener('click', () => location.reload());
 panel.appendChild(btnReset);
 
-// ---------- Carga de imágenes ----------
+// ---------- Carga de medios ----------
+let media: Media | null = null;
+let pulling = false;
+
+function setMedia(m: Media, label: string) {
+  media?.dispose();
+  media = m;
+  status.textContent = `${label} · ${m.width}×${m.height}` + (m.kind !== 'image' ? ` · ${fmt(m.duration)}` : '');
+  redraw();
+}
+
 async function loadFile(f: File) {
   try {
-    const bmp = await createImageBitmap(f);
-    engine.setImage(bmp);
-    status.textContent = `${f.name} · ${bmp.width}×${bmp.height}`;
-    redraw();
-  } catch {
-    status.textContent = 'No se pudo leer esa imagen';
+    if (f.type.startsWith('video/')) {
+      status.textContent = 'Cargando vídeo…';
+      setMedia(await VideoMedia.load(f), f.name);
+    } else if (f.type === 'image/gif') {
+      const gif = await GifMedia.load(f, (i, n) => (status.textContent = `Leyendo GIF… ${i}/${n}`));
+      setMedia(gif, `${f.name} · ${gif.frameCount} fotogramas`);
+    } else {
+      setMedia(new ImageMedia(await createImageBitmap(f)), f.name);
+    }
+  } catch (e) {
+    status.textContent = e instanceof Error ? e.message : 'No se pudo leer ese archivo';
   }
 }
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   const f = e.dataTransfer?.files[0];
-  if (f && f.type.startsWith('image/')) loadFile(f);
+  if (f && (f.type.startsWith('image/') || f.type.startsWith('video/'))) loadFile(f);
 });
 
-engine.setImage(makeDemoImage());
-status.textContent = 'Imagen de prueba · arrastra una foto o usa el selector';
-redraw();
+function loop() {
+  requestAnimationFrame(loop);
+  const m = media;
+  if (m && !pulling) {
+    pulling = true;
+    m.pull()
+      .then((fr) => {
+        if (!fr || m !== media) return;
+        engine.ingest(fr.src, m.width, m.height, params.smooth, fr.reset);
+        fr.close?.();
+        needRender = true;
+      })
+      .finally(() => (pulling = false));
+  }
+  if (needRender) {
+    needRender = false;
+    engine.render(params);
+  }
+  updateTransport();
+}
+
+setMedia(new ImageMedia(makeDemoImage()), 'Imagen de prueba');
+status.textContent = 'Imagen de prueba · arrastra una foto, GIF o vídeo, o usa el selector';
+loop();
