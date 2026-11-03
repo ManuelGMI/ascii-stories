@@ -9,6 +9,7 @@ import { drawTextLayers, newLayer, type HitRect } from './text';
 import { buildTextUI, type Project } from './textui';
 import { buildExportUI } from './exportui';
 import { fmtTime, slider as uiSlider } from './ui';
+import { CUSTOM_PALETTE, NO_PALETTE, PALETTES, resolvePalette } from './palette';
 
 const canvas = document.getElementById('preview') as HTMLCanvasElement;
 const panel = document.getElementById('controls') as HTMLElement;
@@ -38,10 +39,14 @@ function section(title: string) {
   return s;
 }
 
+// Controles enlazados a `params`; refreshControls() los resincroniza tras cambios por código.
+const refreshers: (() => void)[] = [];
+const refreshControls = () => refreshers.forEach((f) => f());
+
 function slider(
   s: HTMLElement, label: string, key: keyof Params,
   min: number, max: number, step: number,
-) {
+): HTMLElement {
   const row = document.createElement('label');
   row.className = 'row';
   const val = document.createElement('span');
@@ -54,6 +59,10 @@ function slider(
   input.value = String(params[key]);
   const upd = () => (val.textContent = Number(input.value).toFixed(step < 1 ? 2 : 0));
   upd();
+  refreshers.push(() => {
+    input.value = String(params[key]);
+    upd();
+  });
   input.addEventListener('input', () => {
     (params[key] as number) = Number(input.value);
     upd();
@@ -65,9 +74,10 @@ function slider(
   });
   row.append(Object.assign(document.createElement('span'), { textContent: label }), val, input);
   s.appendChild(row);
+  return row;
 }
 
-function checkbox(s: HTMLElement, label: string, key: 'invert' | 'mono' | 'revealLoop') {
+function checkbox(s: HTMLElement, label: string, key: 'invert' | 'revealLoop') {
   const row = document.createElement('label');
   row.className = 'check';
   const input = document.createElement('input');
@@ -81,7 +91,7 @@ function checkbox(s: HTMLElement, label: string, key: 'invert' | 'mono' | 'revea
   s.appendChild(row);
 }
 
-function color(s: HTMLElement, label: string, key: 'monoColor' | 'bgColor') {
+function color(s: HTMLElement, label: string, key: 'monoColor' | 'bgColor'): HTMLElement {
   const row = document.createElement('label');
   row.className = 'check';
   const input = document.createElement('input');
@@ -93,6 +103,7 @@ function color(s: HTMLElement, label: string, key: 'monoColor' | 'bgColor') {
   });
   row.append(input, document.createTextNode(' ' + label));
   s.appendChild(row);
+  return row;
 }
 
 // Imagen
@@ -102,6 +113,13 @@ file.type = 'file';
 file.accept = 'image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm';
 file.addEventListener('change', () => file.files?.[0] && loadFile(file.files[0]));
 sImg.appendChild(file);
+// Estilo
+const sSt = section('Estilo');
+const styleSel = document.createElement('select');
+['ASCII a color', 'ASCII monocromo', 'Pixel art', 'Dithering (tramado)'].forEach((n, i) => styleSel.add(new Option(n, String(i))));
+sSt.appendChild(styleSel);
+styleSel.addEventListener('change', () => setStyle(Number(styleSel.value)));
+
 // Línea de tiempo del proyecto: gobierna revelado, textos y audio.
 const project: Project = { layers: [newLayer()], selected: '' };
 project.selected = project.layers[0].id;
@@ -234,7 +252,7 @@ sImg.appendChild(btnPng);
 
 // Caracteres
 const sCh = section('Caracteres');
-slider(sCh, 'Tamaño de celda (px)', 'cell', 6, 40, 1);
+const rowCell = slider(sCh, 'Tamaño de celda / píxel (px)', 'cell', 3, 40, 1);
 const preset = document.createElement('select');
 for (const name of Object.keys(CHARSETS)) preset.add(new Option(name, name));
 preset.add(new Option('Personalizado', ''));
@@ -263,7 +281,7 @@ sCh.append(preset, custom);
 checkbox(sCh, 'Invertir luminosidad', 'invert');
 
 // Bordes
-const sEd = section('Bordes direccionales');
+const sEd = section('Bordes y contornos');
 slider(sEd, 'Intensidad (0 = off)', 'edgeStrength', 0, 10, 0.1);
 slider(sEd, 'Umbral', 'edgeThreshold', 0, 1.5, 0.01);
 
@@ -273,14 +291,80 @@ slider(sCo, 'Brillo', 'brightness', -0.5, 0.5, 0.01);
 slider(sCo, 'Contraste', 'contrast', 0.3, 2.5, 0.01);
 slider(sCo, 'Saturación', 'saturation', 0, 3, 0.01);
 slider(sCo, 'Gamma', 'gamma', 0.4, 2.5, 0.01);
-slider(sCo, 'Intensidad del carácter', 'glyphBoost', 0.5, 2, 0.01);
-checkbox(sCo, 'Monocromo', 'mono');
-color(sCo, 'Color monocromo', 'monoColor');
+const rowBoost = slider(sCo, 'Intensidad del carácter', 'glyphBoost', 0.5, 2, 0.01);
+const rowMono = color(sCo, 'Color monocromo', 'monoColor');
+
+// Paleta y tramado (pixel art / dithering)
+const sPal = section('Paleta y tramado');
+const palSel = document.createElement('select');
+for (const n of [...Object.keys(PALETTES), CUSTOM_PALETTE, NO_PALETTE]) palSel.add(new Option(n, n));
+const palCustom = document.createElement('input');
+palCustom.type = 'text';
+palCustom.className = 'text';
+palCustom.spellcheck = false;
+palCustom.placeholder = '#000000 #ff0066 #ffffff …';
+const swatches = document.createElement('div');
+swatches.className = 'swatches';
+const dithSel = document.createElement('select');
+['Sin tramado', 'Ordenado (Bayer)', 'Difusión de error (Floyd–Steinberg)', 'Difusión de error (Atkinson)']
+  .forEach((n, i) => dithSel.add(new Option(n, String(i))));
+const matSel = document.createElement('select');
+[['1', 'Matriz Bayer 2×2'], ['2', 'Matriz Bayer 4×4'], ['3', 'Matriz Bayer 8×8']].forEach(([v, l]) => matSel.add(new Option(l, v)));
+const dithHint = document.createElement('p');
+dithHint.className = 'hint';
+dithHint.textContent = 'La difusión de error puede titilar en vídeo; Bayer es estable entre fotogramas.';
+sPal.append(palSel, palCustom, swatches, dithSel, matSel);
+const rowDither = slider(sPal, 'Intensidad del tramado', 'ditherAmount', 0, 2, 0.01);
+sPal.appendChild(dithHint);
+
+function syncPaletteUI() {
+  palSel.value = params.palette;
+  palCustom.value = params.customPalette;
+  palCustom.hidden = params.palette !== CUSTOM_PALETTE;
+  dithSel.value = String(params.ditherMode);
+  matSel.value = String(params.bayerLevels);
+  matSel.hidden = params.ditherMode !== 1;
+  rowDither.hidden = params.ditherMode === 0;
+  swatches.replaceChildren(
+    ...resolvePalette(params.palette, params.customPalette).map((c) =>
+      Object.assign(document.createElement('span'), { title: `rgb(${c})` , style: `background: rgb(${c})` }) as HTMLElement),
+  );
+}
+palSel.addEventListener('change', () => { params.palette = palSel.value; syncPaletteUI(); redraw(); });
+palCustom.addEventListener('input', () => { params.customPalette = palCustom.value; syncPaletteUI(); redraw(); });
+dithSel.addEventListener('change', () => { params.ditherMode = Number(dithSel.value); syncPaletteUI(); redraw(); });
+matSel.addEventListener('change', () => { params.bayerLevels = Number(matSel.value); redraw(); });
+
+// Cada grupo de estilos recuerda su tamaño de celda y contornos.
+const groupStore = { ascii: { cell: 12, edgeStrength: 3 }, grid: { cell: 6, edgeStrength: 0 } };
+let group: 'ascii' | 'grid' = 'ascii';
+function setStyle(v: number) {
+  const prev = params.style;
+  const g = v >= 2 ? 'grid' : 'ascii';
+  if (g !== group) {
+    groupStore[group] = { cell: params.cell, edgeStrength: params.edgeStrength };
+    Object.assign(params, groupStore[g]);
+    group = g;
+  }
+  if (v === 2 && prev !== 2) Object.assign(params, { palette: 'PICO-8', ditherMode: 0 });
+  if (v === 3 && prev !== 3) Object.assign(params, { palette: 'Blanco y negro', ditherMode: 1, bayerLevels: 2, ditherAmount: 1 });
+  params.style = v;
+  styleSel.value = String(v);
+  refreshControls();
+  syncPaletteUI();
+  const grid = v >= 2;
+  sCh.hidden = grid;
+  sPal.hidden = !grid;
+  rowBoost.hidden = rowMono.hidden = rowBgMix.hidden = grid;
+  rowMono.hidden = v !== 1;
+  rowCell.hidden = false;
+  redraw();
+}
 
 // Fondo y efectos
 const sFx = section('Fondo y efectos');
 color(sFx, 'Color de fondo', 'bgColor');
-slider(sFx, 'Imagen tenue en el fondo', 'bgMix', 0, 0.6, 0.01);
+const rowBgMix = slider(sFx, 'Imagen tenue en el fondo', 'bgMix', 0, 0.6, 0.01);
 slider(sFx, 'Scanlines', 'scanlines', 0, 1, 0.01);
 slider(sFx, 'Grosor scanline (px)', 'scanPeriod', 2, 16, 1);
 slider(sFx, 'Brillo CRT (bloom)', 'bloom', 0, 3, 0.01);
@@ -341,6 +425,8 @@ const audioUI = buildAudioUI(
 
 const sVid = section('Vídeo / GIF');
 slider(sVid, 'Suavizado temporal (0 = off)', 'smooth', 0, 0.9, 0.01);
+
+setStyle(0);
 
 const sEx = section('Exportar');
 let exporting = false;
