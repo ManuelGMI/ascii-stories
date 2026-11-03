@@ -19,12 +19,13 @@ uniform float u_gamma;
 uniform float u_time;       // s
 uniform float u_reveal;     // 0 off, 1 aleatorio, 2 escritura, 3 barrido →, 4 barrido ↓, 5 radial, 6 lluvia
 uniform float u_progress;   // 0..1 del revelado
+uniform float u_zoom;       // zoom de la imagen (pulso al ritmo)
 
 const float PI = 3.14159265;
 
 // Imagen "cover" dentro del lienzo de salida. px con origen arriba-izquierda.
 vec2 srcUV(vec2 px) {
-  float s = max(u_res.x / u_srcSize.x, u_res.y / u_srcSize.y);
+  float s = max(u_res.x / u_srcSize.x, u_res.y / u_srcSize.y) * u_zoom;
   return (px - 0.5 * u_res) / (u_srcSize * s) + 0.5;
 }
 
@@ -286,6 +287,7 @@ uniform float u_time;
 uniform float u_scanSpeed; // px/s de desplazamiento de las scanlines
 uniform float u_bar;       // intensidad de la barra de brillo que barre la pantalla
 uniform float u_flash;     // destellos / parpadeo CRT
+uniform float u_gain;      // ganancia global (pulso al ritmo)
 
 out vec4 outColor;
 
@@ -297,7 +299,7 @@ void main() {
   vec3 glow = textureLod(u_tex, uv, 3.0).rgb * 0.40
             + textureLod(u_tex, uv, 4.0).rgb * 0.35
             + textureLod(u_tex, uv, 5.0).rgb * 0.25;
-  vec3 c = base + glow * u_bloom;
+  vec3 c = (base + glow * u_bloom) * u_gain;
 
   float line = 0.5 + 0.5 * cos(6.2831853 * (gl_FragCoord.y + u_time * u_scanSpeed) / u_scanPeriod);
   c *= 1.0 - u_scan * (1.0 - line);

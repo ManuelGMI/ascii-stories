@@ -37,11 +37,24 @@ export interface Params {
   scanSpeed: number;
   scanBar: number;
   crtFlash: number;
+  // Pulso al ritmo de la música
+  pulseOn: boolean;
+  pulseSource: string; // bass | mid | high | vol | beat | metronome
+  pulseSens: number;
+  pulseAttack: number; // ms
+  pulseRelease: number; // ms
+  pulseBpm: number; // solo con la fuente "metrónomo"
+  pulseBright: number; // brillo de la imagen que se suma con el nivel
+  pulseGlow: number; // destello (bloom y ganancia)
+  pulseZoom: number; // zoom de la imagen
+  pulseText: boolean; // el texto también late
 }
 
 export interface Anim {
   time: number; // s
   progress: number; // 0..1 del revelado
+  level?: number; // nivel del pulso (0..~1.5)
+  textScale?: number; // escala del texto (pulso)
 }
 
 export const OUT_W = 1080;
@@ -81,6 +94,16 @@ export const DEFAULTS: Params = {
   scanSpeed: 0,
   scanBar: 0,
   crtFlash: 0,
+  pulseOn: false,
+  pulseSource: 'bass',
+  pulseSens: 1,
+  pulseAttack: 20,
+  pulseRelease: 220,
+  pulseBpm: 120,
+  pulseBright: 0.2,
+  pulseGlow: 0.8,
+  pulseZoom: 0.05,
+  pulseText: false,
 };
 
 /** Progreso del revelado (0..1) para un instante t del reloj de animación. */
@@ -294,7 +317,9 @@ export class Engine {
     b.use();
     b.i('u_tex', 0);
     b.v2('u_res', OUT_W, OUT_H);
-    b.f('u_bloom', p.bloom);
+    const L = anim.level ?? 0;
+    b.f('u_bloom', p.bloom + L * p.pulseGlow);
+    b.f('u_gain', 1 + L * p.pulseGlow * 0.35);
     b.f('u_scan', p.scanlines);
     b.f('u_scanPeriod', p.scanPeriod);
     b.f('u_time', anim.time);
@@ -324,7 +349,8 @@ export class Engine {
     a.f('u_n', this.atlas!.rampCount);
     a.f('u_edgeStrength', p.edgeStrength);
     a.f('u_edgeThreshold', p.edgeThreshold);
-    a.f('u_brightness', p.brightness);
+    a.f('u_brightness', p.brightness + (anim.level ?? 0) * p.pulseBright);
+    a.f('u_zoom', 1 + (anim.level ?? 0) * p.pulseZoom);
     a.f('u_contrast', p.contrast);
     a.f('u_saturation', p.saturation);
     a.f('u_gamma', p.gamma);
@@ -357,7 +383,8 @@ export class Engine {
       prog.v2('u_res', OUT_W, OUT_H);
       prog.v2('u_srcSize', this.rawW, this.rawH);
       prog.v2('u_cell', px, px);
-      prog.f('u_brightness', p.brightness);
+      prog.f('u_brightness', p.brightness + (anim.level ?? 0) * p.pulseBright);
+      prog.f('u_zoom', 1 + (anim.level ?? 0) * p.pulseZoom);
       prog.f('u_contrast', p.contrast);
       prog.f('u_saturation', p.saturation);
       prog.f('u_gamma', p.gamma);

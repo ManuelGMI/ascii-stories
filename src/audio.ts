@@ -1,3 +1,5 @@
+import { analyzeAudio, type AudioEnvelope } from './analysis';
+
 // Pista de audio propia: decodificación, recorte exacto y volumen (Web Audio API).
 // Mientras suena, su reloj es el maestro de la línea de tiempo.
 
@@ -9,6 +11,7 @@ export class AudioTrack {
   private active = false;
 
   buffer: AudioBuffer | null = null;
+  env: AudioEnvelope | null = null; // análisis de ritmo (para el pulso)
   name = '';
   trimStart = 0;
   trimEnd = 0;
@@ -23,16 +26,19 @@ export class AudioTrack {
     await this.ctx.resume();
     this.stop();
     const buf = await this.ctx.decodeAudioData(await file.arrayBuffer());
+    this.env = null;
     this.buffer = buf;
     this.name = file.name;
     this.trimStart = 0;
     this.trimEnd = buf.duration;
     this.gain!.gain.value = this.volume;
+    this.env = await analyzeAudio(buf); // el pulso al ritmo usa este análisis
   }
 
   clear() {
     this.stop();
     this.buffer = null;
+    this.env = null;
     this.name = '';
   }
 

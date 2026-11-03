@@ -114,6 +114,7 @@ export function drawTextLayers(
   t: number,
   duration: number,
   selectedId?: string,
+  pulse = 1, // escala extra por el pulso al ritmo
 ): HitRect[] {
   const W = ctx.canvas.width;
   const H = ctx.canvas.height;
@@ -156,7 +157,7 @@ export function drawTextLayers(
 
     ctx.globalAlpha = alpha;
     ctx.translate(cx + offX, cy + offY);
-    ctx.scale(scale, scale);
+    ctx.scale(scale * pulse, scale * pulse);
 
     if (L.bg) {
       ctx.save();

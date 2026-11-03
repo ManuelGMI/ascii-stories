@@ -30,9 +30,10 @@ async function renderFrame(cx: ExportInput, comp: CanvasRenderingContext2D, t: n
     cx.engine.ingest(fr.src, m.width, m.height, cx.params.smooth, first || fr.reset);
     fr.close?.();
   }
-  cx.engine.render(cx.params, cx.animAt(t));
+  const anim = cx.animAt(t);
+  cx.engine.render(cx.params, anim);
   comp.drawImage(cx.glCanvas, 0, 0); // en la misma tarea que render(), antes de que se limpie el búfer
-  drawTextLayers(comp, cx.layers, t, cx.duration);
+  drawTextLayers(comp, cx.layers, t, cx.duration, undefined, anim.textScale ?? 1);
 }
 
 function makeComp() {

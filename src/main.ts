@@ -3,6 +3,7 @@ import { CHARSETS } from './atlas';
 import { makeDemoImage } from './demo';
 import { DEFAULTS, Engine, OUT_H, OUT_W, revealProgress, type Anim, type Params } from './engine';
 import { GifMedia, ImageMedia, VideoMedia, type Media } from './media';
+import { buildCurve, sampleCurve, type PulseSource } from './analysis';
 import { AudioTrack } from './audio';
 import { buildAudioUI } from './audioui';
 import { drawTextLayers, newLayer, type HitRect } from './text';
@@ -77,7 +78,7 @@ function slider(
   return row;
 }
 
-function checkbox(s: HTMLElement, label: string, key: 'invert' | 'revealLoop') {
+function checkbox(s: HTMLElement, label: string, key: 'invert' | 'revealLoop' | 'pulseOn' | 'pulseText') {
   const row = document.createElement('label');
   row.className = 'check';
   const input = document.createElement('input');
@@ -391,7 +392,7 @@ function restartClock() {
 }
 function animActive() {
   return (
-    params.reveal > 0 || params.flicker > 0 || params.scanSpeed !== 0 || params.scanBar > 0 || params.crtFlash > 0
+    params.pulseOn || params.reveal > 0 || params.flicker > 0 || params.scanSpeed !== 0 || params.scanBar > 0 || params.crtFlash > 0
   );
 }
 async function exportFrame(): Promise<Blob> {
@@ -404,8 +405,71 @@ async function exportFrame(): Promise<Blob> {
   drawTextLayers(c, project.layers, clock, projectDuration());
   return new Promise((res, rej) => out.toBlob((b) => (b ? res(b) : rej(new Error('toBlob'))), 'image/png'));
 }
+// Pulso al ritmo: función determinista del tiempo (vale igual en vista previa y exportación).
+let curve: Float32Array | null = null;
+let curveKey = '';
+let curveEnv: unknown = null;
+function pulseLevel(t: number): number {
+  if (!params.pulseOn) return 0;
+  let v = 0;
+  if (params.pulseSource === 'metronome') {
+    v = Math.exp(-((t * params.pulseBpm) / 60 % 1) * 5);
+  } else if (audio.env) {
+    const key = `${params.pulseSource}|${params.pulseAttack}|${params.pulseRelease}`;
+    if (key !== curveKey || curveEnv !== audio.env) {
+      curve = buildCurve(audio.env, params.pulseSource as PulseSource, params.pulseAttack, params.pulseRelease);
+      curveKey = key;
+      curveEnv = audio.env;
+    }
+    v = sampleCurve(curve!, audio.env.hop, audio.trimStart + t);
+  }
+  return v * params.pulseSens;
+}
+
 function currentAnim(t = clock): Anim {
-  return { time: t, progress: params.reveal > 0 ? revealProgress(params, t) : 1 };
+  const level = pulseLevel(t);
+  return {
+    time: t,
+    progress: params.reveal > 0 ? revealProgress(params, t) : 1,
+    level,
+    textScale: params.pulseText ? 1 + level * params.pulseZoom * 1.5 : 1,
+  };
+}
+
+const sPu = section('Pulso al ritmo');
+checkbox(sPu, 'Activar pulso', 'pulseOn');
+const pulseSel = document.createElement('select');
+[['bass', 'Graves (bombo)'], ['mid', 'Medios'], ['high', 'Agudos'], ['vol', 'Volumen general'], ['beat', 'Golpes (beats detectados)'], ['metronome', 'Metrónomo (sin audio)']]
+  .forEach(([v, l]) => pulseSel.add(new Option(l, v)));
+sPu.appendChild(pulseSel);
+const pulseHint = document.createElement('p');
+pulseHint.className = 'hint';
+sPu.appendChild(pulseHint);
+const rowBpm = slider(sPu, 'Pulsaciones por minuto', 'pulseBpm', 40, 220, 1);
+rowBpm.hidden = true;
+pulseSel.addEventListener('change', () => {
+  params.pulseSource = pulseSel.value;
+  rowBpm.hidden = pulseSel.value !== 'metronome';
+  redraw();
+});
+slider(sPu, 'Sensibilidad', 'pulseSens', 0.2, 3, 0.01);
+slider(sPu, 'Ataque (ms)', 'pulseAttack', 1, 200, 1);
+slider(sPu, 'Relajación (ms)', 'pulseRelease', 20, 1200, 1);
+slider(sPu, 'Brillo de la imagen', 'pulseBright', 0, 0.6, 0.01);
+slider(sPu, 'Destello (bloom)', 'pulseGlow', 0, 3, 0.01);
+slider(sPu, 'Zoom de la imagen', 'pulseZoom', 0, 0.3, 0.005);
+checkbox(sPu, 'El texto también late', 'pulseText');
+const meter = document.createElement('div');
+meter.className = 'meter';
+const meterBar = document.createElement('div');
+meter.appendChild(meterBar);
+sPu.appendChild(meter);
+function updatePulseUI(level: number) {
+  meterBar.style.width = `${Math.min(level, 1.5) / 1.5 * 100}%`;
+  const needAudio = params.pulseSource !== 'metronome' && !audio.env;
+  pulseHint.textContent = !params.pulseOn
+    ? 'Desactivado.'
+    : needAudio ? 'Carga un audio (o elige “Metrónomo”) para ver el pulso.' : 'Activo: reacciona al ritmo.';
 }
 
 const sTx = section('Texto');
@@ -504,7 +568,7 @@ let hits: HitRect[] = [];
 const hasTimedText = () => project.layers.length > 0;
 function drawOverlay() {
   octx.clearRect(0, 0, OUT_W, OUT_H);
-  hits = drawTextLayers(octx, project.layers, clock, projectDuration(), project.selected);
+  hits = drawTextLayers(octx, project.layers, clock, projectDuration(), project.selected, currentAnim().textScale ?? 1);
 }
 
 // Arrastrar textos sobre la vista previa
@@ -571,6 +635,7 @@ function loop() {
     engine.render(params, currentAnim());
     drawOverlay();
   }
+  updatePulseUI(pulseLevel(clock));
   audioUI.draw(audio.buffer ? clock : -1);
   updateTimeline();
   updateTransport();
@@ -579,3 +644,5 @@ function loop() {
 setMedia(new ImageMedia(makeDemoImage()), 'Imagen de prueba');
 status.textContent = 'Imagen de prueba · arrastra una foto, GIF o vídeo, o usa el selector';
 loop();
+
+if (import.meta.env.DEV) (window as unknown as { __app: unknown }).__app = { audio, pulseLevel, params };

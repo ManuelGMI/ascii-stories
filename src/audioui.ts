@@ -89,7 +89,7 @@ export function buildAudioUI(
   file.addEventListener('change', async () => {
     const f = file.files?.[0];
     if (!f) return;
-    info.textContent = 'Decodificando audio…';
+    info.textContent = 'Decodificando y analizando el ritmo…';
     try {
       await audio.load(f);
       sync();
