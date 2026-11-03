@@ -19,6 +19,10 @@ export interface Media {
   step(dir: number, fps: number): void;
   /** Devuelve un fotograma nuevo si lo hay desde la última llamada. */
   pull(): Promise<Frame | null>;
+  /** Fotograma exacto en el instante t del proyecto (en bucle). Para exportar; el medio debe estar en pausa. */
+  frameAt(t: number): Promise<Frame>;
+  /** Fuerza que el siguiente pull() entregue el fotograma actual (tras exportar). */
+  refresh(): void;
   dispose(): void;
 }
 
@@ -40,6 +44,8 @@ export class ImageMedia implements Media {
     this.done = true;
     return { src: this.src, reset: true };
   }
+  async frameAt(): Promise<Frame> { return { src: this.src, reset: true }; }
+  refresh() { this.done = false; }
   dispose() { if (this.src instanceof ImageBitmap) this.src.close(); }
 }
 
@@ -105,6 +111,22 @@ export class VideoMedia implements Media {
     this.lastTime = v.currentTime;
     return { src: v, reset };
   }
+
+  private exportLast = -1;
+  async frameAt(t: number): Promise<Frame> {
+    const v = this.video;
+    const tt = Math.min(this.duration > 0 ? t % this.duration : 0, Math.max(this.duration - 0.001, 0));
+    const reset = tt < this.exportLast; // bucle
+    this.exportLast = tt;
+    if (Math.abs(v.currentTime - tt) > 1e-4) {
+      await new Promise<void>((res) => {
+        v.addEventListener('seeked', () => res(), { once: true });
+        v.currentTime = tt;
+      });
+    }
+    return { src: v, reset };
+  }
+  refresh() { this.dirty = true; this.discontinuity = true; this.exportLast = -1; }
 
   dispose() {
     this.video.pause();
@@ -204,6 +226,21 @@ export class GifMedia implements Media {
       this.busy = false;
     }
   }
+
+  private exportLast = -1;
+  async frameAt(t: number): Promise<Frame> {
+    const ms = (t % this.duration) * 1000;
+    let lo = 0, hi = this.starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.starts[mid] <= ms) lo = mid; else hi = mid - 1;
+    }
+    const reset = lo < this.exportLast;
+    this.exportLast = lo;
+    const { image } = await this.dec.decode({ frameIndex: lo });
+    return { src: image, reset, close: () => image.close() };
+  }
+  refresh() { this.shown = -1; this.discontinuity = true; this.exportLast = -1; }
 
   dispose() { this.dec.close(); }
 }

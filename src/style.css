@@ -28,3 +28,6 @@ textarea.text { resize: vertical; font-family: inherit; }
 .transport input[type=range] { width: 100%; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .two button { font-size: 12px; padding: 6px 4px; }
+
+.export-overlay { position: fixed; left: 0; top: 0; bottom: 0; width: 300px; z-index: 10; background: #12141aee; padding: 24px 16px; backdrop-filter: blur(2px); }
+.export-overlay progress { width: 100%; height: 10px; }

@@ -7,6 +7,7 @@ import { AudioTrack } from './audio';
 import { buildAudioUI } from './audioui';
 import { drawTextLayers, newLayer, type HitRect } from './text';
 import { buildTextUI, type Project } from './textui';
+import { buildExportUI } from './exportui';
 import { fmtTime, slider as uiSlider } from './ui';
 
 const canvas = document.getElementById('preview') as HTMLCanvasElement;
@@ -319,8 +320,8 @@ async function exportFrame(): Promise<Blob> {
   drawTextLayers(c, project.layers, clock, projectDuration());
   return new Promise((res, rej) => out.toBlob((b) => (b ? res(b) : rej(new Error('toBlob'))), 'image/png'));
 }
-function currentAnim(): Anim {
-  return { time: clock, progress: params.reveal > 0 ? revealProgress(params, clock) : 1 };
+function currentAnim(t = clock): Anim {
+  return { time: t, progress: params.reveal > 0 ? revealProgress(params, t) : 1 };
 }
 
 const sTx = section('Texto');
@@ -341,6 +342,34 @@ const audioUI = buildAudioUI(
 const sVid = section('Vídeo / GIF');
 slider(sVid, 'Suavizado temporal (0 = off)', 'smooth', 0, 0.9, 0.01);
 
+const sEx = section('Exportar');
+let exporting = false;
+buildExportUI(sEx, {
+  begin() {
+    const was = { playing: clockPlaying, clock };
+    clockPlaying = false;
+    exporting = true;
+    audio.stop();
+    media?.pause();
+    return () => {
+      exporting = false;
+      clock = was.clock;
+      media?.refresh();
+      if (media && media.kind !== 'image') media.seek(clock % media.duration);
+      clockPlaying = was.playing;
+      if (was.playing) {
+        audio.playFrom(clock);
+        media?.play();
+      }
+      redraw();
+    };
+  },
+  input: () => ({
+    engine, glCanvas: canvas, params, media, layers: project.layers, audio,
+    duration: projectDuration(), animAt: (t: number) => currentAnim(t),
+  }),
+});
+
 const btnReset = document.createElement('button');
 btnReset.textContent = 'Restablecer';
 btnReset.addEventListener('click', () => location.reload());
@@ -353,6 +382,12 @@ let pulling = false;
 function setMedia(m: Media, label: string) {
   media?.dispose();
   media = m;
+  if (m.kind !== 'image') {
+    // La historia dura lo que el vídeo / GIF (entre 3 y 60 s); se puede cambiar después.
+    durSlider.value = String(Math.min(60, Math.max(3, Math.round(m.duration * 2) / 2)));
+    durSlider.dispatchEvent(new Event('input'));
+  }
+  clock = 0;
   status.textContent = `${label} · ${m.width}×${m.height}` + (m.kind !== 'image' ? ` · ${fmt(m.duration)}` : '');
   redraw();
 }
@@ -393,6 +428,7 @@ const toCanvas = (e: PointerEvent) => {
   return { x: ((e.clientX - r.left) / r.width) * OUT_W, y: ((e.clientY - r.top) / r.height) * OUT_H };
 };
 overlay.addEventListener('pointerdown', (e) => {
+  if (exporting) return;
   const p = toCanvas(e);
   const hit = [...hits].reverse().find((h) => p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h);
   if (!hit) return;
@@ -424,6 +460,7 @@ overlay.addEventListener('pointercancel', endDrag);
 
 function loop() {
   requestAnimationFrame(loop);
+  if (exporting) return; // el exportador usa el motor y el reloj
   const m = media;
   if (m && !pulling) {
     pulling = true;
