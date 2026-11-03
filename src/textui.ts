@@ -1,5 +1,5 @@
 import { ENTRY_ANIMS, FONTS, newLayer, type TextLayer } from './text';
-import { button, checkbox, color, el, select, slider } from './ui';
+import { button, checkbox, color, el, fileButton, select, slider } from './ui';
 
 export interface Project {
   layers: TextLayer[];
@@ -91,7 +91,7 @@ export function buildTextUI(
       rebuildEditor();
       onChange();
     });
-    editor.append(el('label', { className: 'hint' }, 'Cargar tipografía propia (.ttf, .otf, .woff2)'), fontFile);
+    fileButton(editor, 'Cargar tipografía propia (.ttf, .otf, .woff2)…', fontFile);
     void fam;
 
     slider(editor, 'Tamaño (px)', L, 'size', 24, 320, 1, onChange, 96);

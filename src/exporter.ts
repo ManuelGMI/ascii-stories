@@ -64,10 +64,10 @@ export interface Mp4Options { fps: number; bitrate: number }
 export async function exportMp4(cx: ExportInput, o: Mp4Options, progress: Progress, signal: AbortSignal): Promise<Blob> {
   const withAudio = !!cx.audio.buffer;
   if (!(await canEncodeVideo('avc', { width: OUT_W, height: OUT_H, bitrate: o.bitrate, frameRate: o.fps }))) {
-    throw new Error(`Este navegador no puede codificar H.264 a ${OUT_W}×${OUT_H} y ${o.fps} fps. Usa Chrome en el Mac.`);
+    throw new Error(`Este navegador no puede codificar H.264 a ${OUT_W}×${OUT_H} y ${o.fps} fps. Prueba con Chrome o Brave, o exporta GIF / PNG.`);
   }
   if (withAudio && !(await canEncodeAudio('aac', { numberOfChannels: 2, sampleRate: 48000 }))) {
-    throw new Error('Este navegador no puede codificar audio AAC. Usa Chrome en el Mac.');
+    throw new Error('Este navegador no puede codificar audio AAC. Prueba con Chrome o Brave, o exporta sin audio (GIF).');
   }
 
   const { canvas, ctx } = makeComp();

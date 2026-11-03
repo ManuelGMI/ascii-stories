@@ -136,9 +136,13 @@ export class VideoMedia implements Media {
   }
 }
 
-// GIF animado con ImageDecoder (WebCodecs). Los fotogramas se decodifican bajo demanda
-// para no llenar la memoria; solo se guardan las duraciones.
-export class GifMedia implements Media {
+import { decompressFrames, parseGIF, type ParsedFrame } from 'gifuct-js';
+
+type FrameSrc = { src: TexImageSource; close?: () => void };
+
+// Secuencia de fotogramas con duraciones (GIF, WebP animado…). La lógica de tiempo, pausa y
+// paso a paso es común; cada subclase solo sabe sacar el fotograma i.
+abstract class FrameSequence implements Media {
   kind = 'gif' as const;
   playing = true;
   duration: number;
@@ -148,13 +152,9 @@ export class GifMedia implements Media {
   private busy = false;
   private discontinuity = true;
   private starts: number[] = [];
+  private exportLast = -1;
 
-  private constructor(
-    private dec: ImageDecoder,
-    private durations: number[], // ms
-    readonly width: number,
-    readonly height: number,
-  ) {
+  constructor(protected durations: number[], readonly width: number, readonly height: number) {
     let acc = 0;
     for (const d of durations) {
       this.starts.push(acc);
@@ -163,28 +163,13 @@ export class GifMedia implements Media {
     this.duration = acc / 1000;
   }
 
-  static async load(file: Blob, onProgress?: (i: number, n: number) => void, mime = 'image/gif'): Promise<GifMedia> {
-    if (typeof ImageDecoder === 'undefined') throw new Error('Este navegador no soporta GIF animado (usa Chrome)');
-    const dec = new ImageDecoder({ data: await file.arrayBuffer(), type: mime });
-    await dec.tracks.ready;
-    const n = dec.tracks.selectedTrack!.frameCount;
-    const durations: number[] = [];
-    let w = 0, h = 0;
-    for (let i = 0; i < n; i++) {
-      const { image } = await dec.decode({ frameIndex: i });
-      const ms = (image.duration ?? 100000) / 1000;
-      durations.push(ms <= 10 ? 100 : ms); // convención de los navegadores
-      w = image.displayWidth;
-      h = image.displayHeight;
-      image.close();
-      onProgress?.(i + 1, n);
-    }
-    return new GifMedia(dec, durations, w, h);
-  }
+  /** Fotograma i (0-based). Puede devolver siempre el mismo lienzo reutilizado. */
+  protected abstract getFrame(i: number): Promise<FrameSrc>;
+  abstract dispose(): void;
 
   get frameCount() { return this.durations.length; }
-  get index() {
-    const ms = this.t * 1000;
+  private indexAt(sec: number) {
+    const ms = sec * 1000;
     let lo = 0, hi = this.starts.length - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
@@ -207,40 +192,121 @@ export class GifMedia implements Media {
   }
   step(dir: number) {
     this.pause();
-    const n = (this.index + dir + this.frameCount) % this.frameCount;
+    const n = (this.indexAt(this.t) + dir + this.frameCount) % this.frameCount;
     this.seek((this.starts[n] + this.durations[n] / 2) / 1000);
   }
 
   async pull(): Promise<Frame | null> {
     this.advance();
-    const i = this.index;
+    const i = this.indexAt(this.t);
     if (i === this.shown || this.busy) return null;
     this.busy = true;
     try {
-      const { image } = await this.dec.decode({ frameIndex: i });
+      const f = await this.getFrame(i);
       const reset = this.discontinuity || i < this.shown;
       this.discontinuity = false;
       this.shown = i;
-      return { src: image, reset, close: () => image.close() };
+      return { src: f.src, reset, close: f.close };
     } finally {
       this.busy = false;
     }
   }
 
-  private exportLast = -1;
   async frameAt(t: number): Promise<Frame> {
-    const ms = (t % this.duration) * 1000;
-    let lo = 0, hi = this.starts.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (this.starts[mid] <= ms) lo = mid; else hi = mid - 1;
-    }
-    const reset = lo < this.exportLast;
-    this.exportLast = lo;
-    const { image } = await this.dec.decode({ frameIndex: lo });
-    return { src: image, reset, close: () => image.close() };
+    const i = this.indexAt(t % this.duration);
+    const reset = i < this.exportLast;
+    this.exportLast = i;
+    const f = await this.getFrame(i);
+    return { src: f.src, reset, close: f.close };
   }
   refresh() { this.shown = -1; this.discontinuity = true; this.exportLast = -1; }
+}
 
+// Con ImageDecoder (WebCodecs; Chrome / Brave). Los fotogramas se decodifican bajo demanda
+// para no llenar la memoria; solo se guardan las duraciones.
+export class GifMedia extends FrameSequence {
+  private constructor(private dec: ImageDecoder, durations: number[], w: number, h: number) {
+    super(durations, w, h);
+  }
+
+  static async load(file: Blob, onProgress?: (i: number, n: number) => void, mime = 'image/gif'): Promise<GifMedia> {
+    if (typeof ImageDecoder === 'undefined') throw new Error('Este navegador no soporta ImageDecoder');
+    const dec = new ImageDecoder({ data: await file.arrayBuffer(), type: mime });
+    await dec.tracks.ready;
+    const n = dec.tracks.selectedTrack!.frameCount;
+    const durations: number[] = [];
+    let w = 0, h = 0;
+    for (let i = 0; i < n; i++) {
+      const { image } = await dec.decode({ frameIndex: i });
+      const ms = (image.duration ?? 100000) / 1000;
+      durations.push(ms <= 10 ? 100 : ms); // convención de los navegadores
+      w = image.displayWidth;
+      h = image.displayHeight;
+      image.close();
+      onProgress?.(i + 1, n);
+    }
+    return new GifMedia(dec, durations, w, h);
+  }
+
+  protected async getFrame(i: number): Promise<FrameSrc> {
+    const { image } = await this.dec.decode({ frameIndex: i });
+    return { src: image, close: () => image.close() };
+  }
   dispose() { this.dec.close(); }
+}
+
+type GifFrame = ParsedFrame;
+
+// Alternativa en JavaScript puro (gifuct-js) para navegadores sin ImageDecoder, como Safari
+// en el iPhone. Compone los fotogramas sobre un lienzo respetando los modos de descarte del GIF.
+export class JsGifMedia extends FrameSequence {
+  private canvas = document.createElement('canvas');
+  private ctx: CanvasRenderingContext2D;
+  private patch = document.createElement('canvas');
+  private pctx: CanvasRenderingContext2D;
+  private cur = -1; // último fotograma compuesto en el lienzo
+  private saved: ImageData | null = null; // para disposalType 3 (restaurar lo anterior)
+
+  private constructor(private frames: GifFrame[], durations: number[], w: number, h: number) {
+    super(durations, w, h);
+    this.canvas.width = w;
+    this.canvas.height = h;
+    this.ctx = this.canvas.getContext('2d', { willReadFrequently: true })!;
+    this.pctx = this.patch.getContext('2d')!;
+  }
+
+  static async load(file: Blob, onProgress?: (i: number, n: number) => void): Promise<JsGifMedia> {
+    const gif = parseGIF(await file.arrayBuffer());
+    const frames = decompressFrames(gif, true) as ParsedFrame[];
+    if (!frames.length) throw new Error('GIF sin fotogramas');
+    const durations = frames.map((f) => (f.delay <= 10 ? 100 : f.delay));
+    onProgress?.(frames.length, frames.length);
+    return new JsGifMedia(frames, durations, gif.lsd.width, gif.lsd.height);
+  }
+
+  private apply(j: number) {
+    const f = this.frames[j];
+    const prev = this.frames[j - 1];
+    if (prev) {
+      if (prev.disposalType === 2) this.ctx.clearRect(prev.dims.left, prev.dims.top, prev.dims.width, prev.dims.height);
+      else if (prev.disposalType === 3 && this.saved) this.ctx.putImageData(this.saved, 0, 0);
+    }
+    this.saved = f.disposalType === 3 ? this.ctx.getImageData(0, 0, this.width, this.height) : null;
+    const { width, height, left, top } = f.dims;
+    this.patch.width = width;
+    this.patch.height = height;
+    this.pctx.putImageData(new ImageData(f.patch as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
+    this.ctx.drawImage(this.patch, left, top); // drawImage respeta la transparencia del parche
+  }
+
+  protected async getFrame(i: number): Promise<FrameSrc> {
+    if (i < this.cur) {
+      this.ctx.clearRect(0, 0, this.width, this.height);
+      this.cur = -1;
+      this.saved = null;
+    }
+    while (this.cur < i) this.apply(++this.cur);
+    return { src: this.canvas };
+  }
+  dispose() {}
 }

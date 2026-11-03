@@ -1,5 +1,5 @@
 import type { AudioTrack } from './audio';
-import { button, el, fmtTime, slider } from './ui';
+import { button, el, fileButton, fmtTime, slider } from './ui';
 
 const W = 268;
 const H = 56;
@@ -27,7 +27,8 @@ export function buildAudioUI(
     el('label', { className: 'hint' }, 'Fin (s)', inEnd),
   );
   const box = el('div');
-  parent.append(file, info, box);
+  fileButton(parent, 'Elegir audio (MP3, M4A, WAV)…', file);
+  parent.append(info, box);
   box.append(wave, trimRow);
   slider(box, 'Volumen', audio as never, 'volume', 0, 2, 0.01, () => audio.setVolume(audio.volume), 1);
   button(box, 'Quitar audio', () => {

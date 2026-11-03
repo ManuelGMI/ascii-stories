@@ -78,3 +78,13 @@ export function fmtTime(t: number) {
   const m = Math.floor(t / 60);
   return `${m}:${(t - m * 60).toFixed(2).padStart(5, '0')}`;
 }
+
+/** Botón en español que abre un selector de archivos oculto (el control nativo sale en inglés). */
+export function fileButton(parent: HTMLElement, label: string, input: HTMLInputElement) {
+  input.hidden = true;
+  input.style.display = 'none';
+  const b = el('button', { textContent: label });
+  b.addEventListener('click', () => input.click());
+  parent.append(b, input);
+  return b;
+}

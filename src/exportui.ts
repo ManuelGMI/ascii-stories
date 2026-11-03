@@ -49,7 +49,31 @@ export function buildExportUI(parent: HTMLElement, hooks: ExportHooks) {
 
   const go = el('button', { textContent: 'Exportar' });
   const msg = el('p', { className: 'hint' });
-  parent.append(fmt, mp4Box, gifBox, go, msg);
+  const result = el('div', { className: 'two' });
+  result.hidden = true;
+  const btnSave = el('button', { textContent: '⬇︎ Descargar' });
+  const btnShare = el('button', { textContent: '↗︎ Compartir / Guardar' });
+  result.append(btnSave, btnShare);
+  parent.append(fmt, mp4Box, gifBox, go, msg, result);
+
+  // En el móvil, la hoja de compartir permite guardar en Fotos o abrir Instagram directamente.
+  const isTouch = matchMedia('(pointer: coarse)').matches;
+  let last: { blob: Blob; name: string } | null = null;
+  const download = () => {
+    if (!last) return;
+    const a = el('a', { href: URL.createObjectURL(last.blob), download: last.name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  };
+  btnSave.addEventListener('click', download);
+  btnShare.addEventListener('click', async () => {
+    if (!last) return;
+    const file = new File([last.blob], last.name, { type: last.blob.type });
+    try {
+      if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file] });
+      else download();
+    } catch { /* el usuario cerró la hoja */ }
+  });
 
   // Capa de progreso que bloquea el panel mientras se exporta
   const overlay = el('div', { className: 'export-overlay' });
@@ -68,6 +92,7 @@ export function buildExportUI(parent: HTMLElement, hooks: ExportHooks) {
     if (controller) return;
     controller = new AbortController();
     msg.textContent = '';
+    result.hidden = true;
     bar.value = 0;
     label.textContent = 'Preparando…';
     overlay.hidden = false;
@@ -83,9 +108,10 @@ export function buildExportUI(parent: HTMLElement, hooks: ExportHooks) {
       const blob = state.format === 'mp4'
         ? await exportMp4(cx, { fps: Number(fps.value), bitrate: Number(qual.value) }, progress, controller.signal)
         : await exportGif(cx, { width: Number(gw.value), delayCs: Number(gfps.value), dither: state.dither }, progress, controller.signal);
-      const a = el('a', { href: URL.createObjectURL(blob), download: `ascii-story.${state.format}` });
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      last = { blob, name: `ascii-story.${state.format}` };
+      result.hidden = false;
+      btnShare.hidden = !navigator.canShare;
+      if (!isTouch) download();
       msg.textContent = `Listo · ${(blob.size / 1e6).toFixed(1)} MB`;
     } catch (e) {
       msg.textContent = e instanceof DOMException && e.name === 'AbortError'

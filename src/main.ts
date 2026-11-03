@@ -2,14 +2,14 @@ import './style.css';
 import { CHARSETS } from './atlas';
 import { makeDemoImage } from './demo';
 import { DEFAULTS, Engine, OUT_H, OUT_W, revealProgress, type Anim, type Params } from './engine';
-import { GifMedia, ImageMedia, VideoMedia, type Media } from './media';
+import { GifMedia, ImageMedia, JsGifMedia, VideoMedia, type Media } from './media';
 import { buildCurve, sampleCurve, type PulseSource } from './analysis';
 import { AudioTrack } from './audio';
 import { buildAudioUI } from './audioui';
 import { drawTextLayers, newLayer, type HitRect } from './text';
 import { buildTextUI, type Project } from './textui';
 import { buildExportUI } from './exportui';
-import { fmtTime, slider as uiSlider } from './ui';
+import { fileButton, fmtTime, slider as uiSlider } from './ui';
 import { CUSTOM_PALETTE, NO_PALETTE, PALETTES, resolvePalette } from './palette';
 
 const canvas = document.getElementById('preview') as HTMLCanvasElement;
@@ -127,13 +127,13 @@ function color(s: HTMLElement, label: string, key: 'monoColor' | 'bgColor'): HTM
 const sImg = section('Imagen');
 const file = document.createElement('input');
 file.type = 'file';
-file.accept = 'image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm';
+file.accept = 'image/*,video/*'; // en iOS así ofrece la fototeca
 file.addEventListener('change', () => {
   const f = file.files?.[0];
   file.value = ''; // permite volver a elegir el mismo archivo
   if (f) void loadFile(f);
 });
-sImg.appendChild(file);
+fileButton(sImg, 'Elegir foto, GIF o vídeo…', file);
 const loadMsg = document.createElement('p');
 loadMsg.className = 'hint error';
 loadMsg.hidden = true;
@@ -148,11 +148,12 @@ btnRemove.addEventListener('click', () => {
 sImg.appendChild(btnRemove);
 // Vista previa: la exportación siempre es 1080×1920; la vista previa puede renderizarse a menos
 // resolución para gastar menos GPU (mismos parámetros, se escalan solos).
-let previewScale = 2 / 3;
+const isTouch = matchMedia('(pointer: coarse)').matches;
+let previewScale = isTouch ? 0.5 : 2 / 3; // en el móvil, vista previa ligera
 const previewSel = document.createElement('select');
 [['1', 'Vista previa: alta (1080×1920)'], ['0.6667', 'Vista previa: media (720×1280)'], ['0.5', 'Vista previa: baja (540×960)']]
   .forEach(([v, l]) => previewSel.add(new Option(l, v)));
-previewSel.value = '0.6667';
+previewSel.value = isTouch ? '0.5' : '0.6667';
 previewSel.addEventListener('change', () => {
   previewScale = Number(previewSel.value);
   engine.setResolution(previewScale);
@@ -566,6 +567,9 @@ let exporting = false;
 buildExportUI(sEx, {
   begin() {
     const was = { playing: clockPlaying, clock };
+    // Que el móvil no apague la pantalla (y pause la exportación) mientras trabaja.
+    let lock: WakeLockSentinel | null = null;
+    navigator.wakeLock?.request('screen').then((l) => (lock = l)).catch(() => {});
     engine.setResolution(1);
     clockPlaying = false;
     exporting = true;
@@ -573,6 +577,7 @@ buildExportUI(sEx, {
     media?.pause();
     return () => {
       exporting = false;
+      void lock?.release();
       engine.setResolution(previewScale);
       clock = was.clock;
       media?.refresh();
@@ -642,16 +647,24 @@ async function loadFile(f: File) {
       status.textContent = 'Cargando vídeo…';
       setMedia(await VideoMedia.load(f.slice(0, f.size, mime)), f.name);
     } else if (kind === 'gif' || kind === 'webp' || kind === 'png') {
-      // Puede ser animado (GIF, WebP, APNG) o fijo.
-      let anim: GifMedia | null = null;
+      // Puede ser animado (GIF, WebP, APNG) o fijo. Sin ImageDecoder (Safari) los GIF se
+      // decodifican con una librería en JavaScript; WebP/APNG animados se abrirán como imagen fija.
+      let anim: GifMedia | JsGifMedia | null = null;
+      const progress = (i: number, n: number) => (status.textContent = `Leyendo fotogramas… ${i}/${n}`);
       if (typeof ImageDecoder !== 'undefined') {
         try {
-          anim = await GifMedia.load(f.slice(0, f.size, mime), (i, n) => (status.textContent = `Leyendo fotogramas… ${i}/${n}`), mime);
+          anim = await GifMedia.load(f.slice(0, f.size, mime), progress, mime);
+        } catch {
+          anim = null;
+        }
+      }
+      // Sin ImageDecoder, o si falla con este GIF: decodificador en JavaScript.
+      if (!anim && kind === 'gif') {
+        try {
+          anim = await JsGifMedia.load(f, progress);
         } catch {
           anim = null; // se intentará como imagen fija
         }
-      } else if (kind === 'gif') {
-        throw new Error('Este navegador no soporta GIF animado. Usa Chrome.');
       }
       if (anim && anim.frameCount > 1) setMedia(anim, `${f.name} · ${anim.frameCount} fotogramas`);
       else {
@@ -789,3 +802,8 @@ status.textContent = 'Imagen de prueba · arrastra una foto, GIF o vídeo, o usa
 loop();
 
 if (import.meta.env.DEV) (window as unknown as { __app: unknown }).__app = { audio, pulseLevel, params };
+
+// App instalable y disponible sin conexión (solo en la versión compilada).
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
