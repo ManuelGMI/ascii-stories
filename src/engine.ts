@@ -20,6 +20,21 @@ export interface Params {
   scanPeriod: number;
   bloom: number;
   smooth: number; // suavizado temporal (0 = off, hasta ~0.9)
+  // Animación
+  reveal: number; // 0 off, 1 aleatorio, 2 escritura, 3 barrido →, 4 barrido ↓, 5 radial, 6 lluvia
+  revealDuration: number; // s
+  revealHold: number; // s que se mantiene la imagen completa antes de repetir
+  revealLoop: boolean;
+  flicker: number;
+  flickerRate: number;
+  scanSpeed: number;
+  scanBar: number;
+  crtFlash: number;
+}
+
+export interface Anim {
+  time: number; // s
+  progress: number; // 0..1 del revelado
 }
 
 export const OUT_W = 1080;
@@ -45,7 +60,23 @@ export const DEFAULTS: Params = {
   scanPeriod: 4,
   bloom: 0.6,
   smooth: 0.5,
+  reveal: 0,
+  revealDuration: 4,
+  revealHold: 2,
+  revealLoop: true,
+  flicker: 0,
+  flickerRate: 8,
+  scanSpeed: 0,
+  scanBar: 0,
+  crtFlash: 0,
 };
+
+/** Progreso del revelado (0..1) para un instante t del reloj de animación. */
+export function revealProgress(p: Params, t: number): number {
+  const D = Math.max(p.revealDuration, 0.1);
+  const tc = p.revealLoop ? t % (D + p.revealHold) : t;
+  return Math.min(tc / D, 1);
+}
 
 function hex(c: string): [number, number, number] {
   const n = parseInt(c.slice(1), 16);
@@ -214,7 +245,7 @@ export class Engine {
     this.setFilter(this.atlasTex, true);
   }
 
-  render(p: Params) {
+  render(p: Params, anim: Anim = { time: 0, progress: 1 }) {
     if (!this.hasAcc) return;
     const gl = this.gl;
     this.ensureAtlas(p.charset);
@@ -248,6 +279,11 @@ export class Engine {
     a.f('u_mono', p.mono ? 1 : 0);
     a.f('u_bgMix', p.bgMix);
     a.f('u_glyphBoost', p.glyphBoost);
+    a.f('u_time', anim.time);
+    a.f('u_reveal', p.reveal);
+    a.f('u_progress', anim.progress);
+    a.f('u_flicker', p.flicker);
+    a.f('u_flickerRate', p.flickerRate);
     a.v3('u_monoColor', hex(p.monoColor));
     a.v3('u_bg', hex(p.bgColor));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -266,11 +302,15 @@ export class Engine {
     b.f('u_bloom', p.bloom);
     b.f('u_scan', p.scanlines);
     b.f('u_scanPeriod', p.scanPeriod);
+    b.f('u_time', anim.time);
+    b.f('u_scanSpeed', p.scanSpeed);
+    b.f('u_bar', p.scanBar);
+    b.f('u_flash', p.crtFlash);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  exportPNG(p: Params): Promise<Blob> {
-    this.render(p);
+  exportPNG(p: Params, anim?: Anim): Promise<Blob> {
+    this.render(p, anim);
     return new Promise((res, rej) => this.canvas.toBlob((b) => (b ? res(b) : rej(new Error('toBlob'))), 'image/png'));
   }
 }

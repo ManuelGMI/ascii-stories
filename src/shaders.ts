@@ -26,6 +26,11 @@ uniform float u_invert;
 uniform float u_mono;
 uniform float u_bgMix;
 uniform float u_glyphBoost;
+uniform float u_time;        // s
+uniform float u_reveal;      // 0 off, 1 aleatorio, 2 escritura, 3 barrido →, 4 barrido ↓, 5 radial, 6 lluvia
+uniform float u_progress;    // 0..1 del revelado
+uniform float u_flicker;     // prob. de que una celda cambie de carácter
+uniform float u_flickerRate; // Hz
 uniform vec3  u_monoColor;
 uniform vec3  u_bg;
 
@@ -58,6 +63,12 @@ vec3 fetch(vec2 px, float lod) {
 }
 
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+float hash(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
 
 void main() {
   vec2 px = vec2(gl_FragCoord.x, u_res.y - gl_FragCoord.y);
@@ -97,11 +108,61 @@ void main() {
     glyph = min(floor(v * u_n), u_n - 1.0);
   }
 
-  vec2 auv = vec2((glyph + local.x) / total, local.y);
-  float cov = texture(u_atlas, auv).a;
+  vec2 grid = ceil(u_res / u_cell);
+  vec2 uvc = (idx + 0.5) / grid;
+  vec3 gcol0 = u_mono > 0.5 ? u_monoColor * mix(0.55, 1.0, lum) : col * u_glyphBoost;
+  vec3 gcol = gcol0;
+  float visible = 1.0;
 
-  vec3 gcol = u_mono > 0.5 ? u_monoColor * mix(0.55, 1.0, lum) : col * u_glyphBoost;
-  vec3 bg = u_bg + col * u_bgMix;
+  // Parpadeo: algunas celdas saltan a un carácter vecino de la rampa y vibran de brillo.
+  if (u_flicker > 0.0 && glyph < u_n) {
+    float tick = floor(u_time * u_flickerRate);
+    if (hash(idx + tick * 17.3) < u_flicker) {
+      float h2 = hash(idx + tick * 5.1 + 9.0);
+      glyph = clamp(glyph + floor(h2 * 5.0) - 2.0, 0.0, u_n - 1.0);
+      gcol *= 0.8 + 0.5 * hash(idx + tick * 2.7 + 3.0);
+    }
+  }
+
+  // Revelado
+  if (u_reveal > 0.5) {
+    if (u_reveal < 5.5) {
+      float thr;
+      if (u_reveal < 1.5)      thr = hash(idx);
+      else if (u_reveal < 2.5) thr = (idx.y * grid.x + idx.x) / (grid.x * grid.y);
+      else if (u_reveal < 3.5) thr = uvc.x;
+      else if (u_reveal < 4.5) thr = uvc.y;
+      else thr = min(length((uvc - 0.5) * vec2(u_res.x / u_res.y, 1.0)) / 0.62, 1.0);
+      float W = 0.08; // anchura del frente con caracteres "en construcción"
+      float d = u_progress * (1.0 + W) - thr;
+      if (d < 0.0) {
+        visible = 0.0;
+      } else if (d < W) {
+        float g = 1.0 - d / W;
+        glyph = max(1.0, floor(hash(idx + floor(u_time * 30.0)) * u_n));
+        gcol = mix(gcol0, vec3(1.0), 0.85 * g);
+      }
+    } else {
+      // Lluvia: cada columna tiene su retardo, velocidad y longitud de estela.
+      float delay = hash(vec2(idx.x, 7.7)) * 0.4;
+      float spd = 1.0 + 0.4 * hash(vec2(idx.x, 3.3));
+      float trail = 8.0 + 16.0 * hash(vec2(idx.x, 1.1));
+      float head = (u_progress - delay) / 0.6 * spd * (grid.y + trail);
+      float dist = head - idx.y;
+      if (dist < 0.0) {
+        visible = 0.0;
+      } else if (dist < trail) {
+        float f = 1.0 - dist / trail;
+        glyph = max(1.0, floor(hash(idx + floor(u_time * 14.0 + idx.x)) * u_n));
+        gcol = dist < 1.5 ? vec3(0.85, 1.0, 0.9) : vec3(0.1, 0.95, 0.35) * f * f;
+      }
+    }
+  }
+
+  vec2 auv = vec2((glyph + local.x) / total, local.y);
+  float cov = texture(u_atlas, auv).a * visible;
+
+  vec3 bg = u_bg + col * u_bgMix * visible;
   outColor = vec4(mix(bg, gcol, clamp(cov, 0.0, 1.0)), 1.0);
 }`;
 
@@ -114,8 +175,14 @@ uniform vec2  u_res;
 uniform float u_bloom;
 uniform float u_scan;
 uniform float u_scanPeriod;
+uniform float u_time;
+uniform float u_scanSpeed; // px/s de desplazamiento de las scanlines
+uniform float u_bar;       // intensidad de la barra de brillo que barre la pantalla
+uniform float u_flash;     // destellos / parpadeo CRT
 
 out vec4 outColor;
+
+float h1(float x) { return fract(sin(x * 91.3458) * 47453.5453); }
 
 void main() {
   vec2 uv = gl_FragCoord.xy / u_res;
@@ -124,8 +191,20 @@ void main() {
             + textureLod(u_tex, uv, 4.0).rgb * 0.35
             + textureLod(u_tex, uv, 5.0).rgb * 0.25;
   vec3 c = base + glow * u_bloom;
-  float line = 0.5 + 0.5 * cos(6.2831853 * gl_FragCoord.y / u_scanPeriod);
+
+  float line = 0.5 + 0.5 * cos(6.2831853 * (gl_FragCoord.y + u_time * u_scanSpeed) / u_scanPeriod);
   c *= 1.0 - u_scan * (1.0 - line);
+
+  // Barra que baja por la pantalla
+  float yy = 1.0 - uv.y;
+  float d = fract(yy - fract(u_time * 0.18) + 0.5) - 0.5;
+  c *= 1.0 + u_bar * 1.6 * exp(-pow(d / 0.07, 2.0));
+
+  // Destellos CRT: vibración rápida + latido lento + chispazos ocasionales
+  float tick = floor(u_time * 24.0);
+  float spark = step(0.93, h1(floor(u_time * 6.0))) * (0.5 + 0.5 * h1(tick));
+  c *= 1.0 + u_flash * ((h1(tick) - 0.5) * 0.25 + 0.06 * sin(u_time * 7.0) + 0.6 * spark);
+
   outColor = vec4(c, 1.0);
 }`;
 

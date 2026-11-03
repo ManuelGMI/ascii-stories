@@ -1,7 +1,7 @@
 import './style.css';
 import { CHARSETS } from './atlas';
 import { makeDemoImage } from './demo';
-import { DEFAULTS, Engine, type Params } from './engine';
+import { DEFAULTS, Engine, revealProgress, type Anim, type Params } from './engine';
 import { GifMedia, ImageMedia, VideoMedia, type Media } from './media';
 
 const canvas = document.getElementById('preview') as HTMLCanvasElement;
@@ -57,7 +57,7 @@ function slider(
   s.appendChild(row);
 }
 
-function checkbox(s: HTMLElement, label: string, key: 'invert' | 'mono') {
+function checkbox(s: HTMLElement, label: string, key: 'invert' | 'mono' | 'revealLoop') {
   const row = document.createElement('label');
   row.className = 'check';
   const input = document.createElement('input');
@@ -146,7 +146,7 @@ sTr.hidden = true;
 const btnPng = document.createElement('button');
 btnPng.textContent = 'Exportar PNG 1080×1920';
 btnPng.addEventListener('click', async () => {
-  const blob = await engine.exportPNG(params);
+  const blob = await engine.exportPNG(params, currentAnim());
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'ascii-story.png';
@@ -208,6 +208,52 @@ slider(sFx, 'Scanlines', 'scanlines', 0, 1, 0.01);
 slider(sFx, 'Grosor scanline (px)', 'scanPeriod', 2, 16, 1);
 slider(sFx, 'Brillo CRT (bloom)', 'bloom', 0, 3, 0.01);
 
+const sAn = section('Animación');
+const revealSel = document.createElement('select');
+['Sin revelado', 'Carácter a carácter (aleatorio)', 'Escritura (línea a línea)', 'Barrido →', 'Barrido ↓', 'Radial desde el centro', 'Lluvia Matrix']
+  .forEach((n, i) => revealSel.add(new Option(n, String(i))));
+revealSel.addEventListener('change', () => {
+  params.reveal = Number(revealSel.value);
+  restartClock();
+});
+sAn.appendChild(revealSel);
+slider(sAn, 'Duración del revelado (s)', 'revealDuration', 0.5, 15, 0.1);
+slider(sAn, 'Pausa antes de repetir (s)', 'revealHold', 0, 8, 0.1);
+checkbox(sAn, 'Repetir en bucle', 'revealLoop');
+slider(sAn, 'Parpadeo de caracteres', 'flicker', 0, 1, 0.01);
+slider(sAn, 'Velocidad del parpadeo (Hz)', 'flickerRate', 1, 30, 1);
+slider(sAn, 'Scanlines en movimiento (px/s)', 'scanSpeed', -200, 200, 1);
+slider(sAn, 'Barra de brillo CRT', 'scanBar', 0, 1, 0.01);
+slider(sAn, 'Destellos CRT', 'crtFlash', 0, 1, 0.01);
+const clockRow = document.createElement('div');
+clockRow.className = 'two';
+const btnClock = Object.assign(document.createElement('button'), { textContent: '❚❚ Pausar animación' });
+const btnRestart = Object.assign(document.createElement('button'), { textContent: '↺ Reiniciar' });
+clockRow.append(btnClock, btnRestart);
+sAn.appendChild(clockRow);
+
+// Reloj de animación (independiente del vídeo): lo usan revelado, parpadeo y efectos CRT.
+let clock = 0;
+let clockPlaying = true;
+let lastNow = performance.now();
+function restartClock() {
+  clock = 0;
+  redraw();
+}
+btnRestart.addEventListener('click', restartClock);
+btnClock.addEventListener('click', () => {
+  clockPlaying = !clockPlaying;
+  btnClock.textContent = clockPlaying ? '❚❚ Pausar animación' : '▶︎ Reanudar animación';
+});
+function animActive() {
+  return (
+    params.reveal > 0 || params.flicker > 0 || params.scanSpeed !== 0 || params.scanBar > 0 || params.crtFlash > 0
+  );
+}
+function currentAnim(): Anim {
+  return { time: clock, progress: params.reveal > 0 ? revealProgress(params, clock) : 1 };
+}
+
 const sVid = section('Vídeo / GIF');
 slider(sVid, 'Suavizado temporal (0 = off)', 'smooth', 0, 0.9, 0.01);
 
@@ -263,9 +309,12 @@ function loop() {
       })
       .finally(() => (pulling = false));
   }
-  if (needRender) {
+  const now = performance.now();
+  if (clockPlaying) clock += (now - lastNow) / 1000;
+  lastNow = now;
+  if (needRender || (clockPlaying && animActive())) {
     needRender = false;
-    engine.render(params);
+    engine.render(params, currentAnim());
   }
   updateTransport();
 }
