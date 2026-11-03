@@ -288,6 +288,7 @@ uniform float u_scanSpeed; // px/s de desplazamiento de las scanlines
 uniform float u_bar;       // intensidad de la barra de brillo que barre la pantalla
 uniform float u_flash;     // destellos / parpadeo CRT
 uniform float u_gain;      // ganancia global (pulso al ritmo)
+uniform float u_lodBias;   // log2(escala de render): mantiene el mismo desenfoque del bloom
 
 out vec4 outColor;
 
@@ -296,9 +297,9 @@ float h1(float x) { return fract(sin(x * 91.3458) * 47453.5453); }
 void main() {
   vec2 uv = gl_FragCoord.xy / u_res;
   vec3 base = textureLod(u_tex, uv, 0.0).rgb;
-  vec3 glow = textureLod(u_tex, uv, 3.0).rgb * 0.40
-            + textureLod(u_tex, uv, 4.0).rgb * 0.35
-            + textureLod(u_tex, uv, 5.0).rgb * 0.25;
+  vec3 glow = textureLod(u_tex, uv, 3.0 + u_lodBias).rgb * 0.40
+            + textureLod(u_tex, uv, 4.0 + u_lodBias).rgb * 0.35
+            + textureLod(u_tex, uv, 5.0 + u_lodBias).rgb * 0.25;
   vec3 c = (base + glow * u_bloom) * u_gain;
 
   float line = 0.5 + 0.5 * cos(6.2831853 * (gl_FragCoord.y + u_time * u_scanSpeed) / u_scanPeriod);

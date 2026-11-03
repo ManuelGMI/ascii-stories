@@ -68,7 +68,7 @@ export class VideoMedia implements Media {
     }
   }
 
-  static async load(file: File): Promise<VideoMedia> {
+  static async load(file: Blob): Promise<VideoMedia> {
     const url = URL.createObjectURL(file);
     const v = document.createElement('video');
     v.muted = true; // el audio llega en el paso 4
@@ -163,9 +163,9 @@ export class GifMedia implements Media {
     this.duration = acc / 1000;
   }
 
-  static async load(file: File, onProgress?: (i: number, n: number) => void): Promise<GifMedia> {
+  static async load(file: Blob, onProgress?: (i: number, n: number) => void, mime = 'image/gif'): Promise<GifMedia> {
     if (typeof ImageDecoder === 'undefined') throw new Error('Este navegador no soporta GIF animado (usa Chrome)');
-    const dec = new ImageDecoder({ data: await file.arrayBuffer(), type: 'image/gif' });
+    const dec = new ImageDecoder({ data: await file.arrayBuffer(), type: mime });
     await dec.tracks.ready;
     const n = dec.tracks.selectedTrack!.frameCount;
     const durations: number[] = [];

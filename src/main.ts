@@ -29,8 +29,24 @@ try {
 }
 
 const params: Params = { ...DEFAULTS };
-let needRender = true;
-const redraw = () => { needRender = true; };
+let needRender = true; // hay que repintar el ASCII (WebGL)
+let needOverlay = true; // hay que repintar el texto
+const redraw = () => { needRender = true; needOverlay = true; };
+
+// Escribe en el DOM solo si el valor cambió (cada escritura puede forzar un recálculo de layout).
+const domCache = new WeakMap<object, string>();
+function setText(el: HTMLElement, v: string) {
+  if (domCache.get(el) !== v) {
+    el.textContent = v;
+    domCache.set(el, v);
+  }
+}
+function setValue(el: HTMLInputElement, v: string) {
+  if (domCache.get(el) !== v) {
+    el.value = v;
+    domCache.set(el, v);
+  }
+}
 
 // ---------- Construcción de controles ----------
 function section(title: string) {
@@ -112,8 +128,39 @@ const sImg = section('Imagen');
 const file = document.createElement('input');
 file.type = 'file';
 file.accept = 'image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm';
-file.addEventListener('change', () => file.files?.[0] && loadFile(file.files[0]));
+file.addEventListener('change', () => {
+  const f = file.files?.[0];
+  file.value = ''; // permite volver a elegir el mismo archivo
+  if (f) void loadFile(f);
+});
 sImg.appendChild(file);
+const loadMsg = document.createElement('p');
+loadMsg.className = 'hint error';
+loadMsg.hidden = true;
+sImg.appendChild(loadMsg);
+const btnRemove = document.createElement('button');
+btnRemove.textContent = 'Quitar imagen';
+btnRemove.title = 'Vuelve a la imagen de prueba';
+btnRemove.addEventListener('click', () => {
+  loadMsg.hidden = true;
+  setMedia(new ImageMedia(makeDemoImage()), 'Imagen de prueba');
+});
+sImg.appendChild(btnRemove);
+// Vista previa: la exportación siempre es 1080×1920; la vista previa puede renderizarse a menos
+// resolución para gastar menos GPU (mismos parámetros, se escalan solos).
+let previewScale = 2 / 3;
+const previewSel = document.createElement('select');
+[['1', 'Vista previa: alta (1080×1920)'], ['0.6667', 'Vista previa: media (720×1280)'], ['0.5', 'Vista previa: baja (540×960)']]
+  .forEach(([v, l]) => previewSel.add(new Option(l, v)));
+previewSel.value = '0.6667';
+previewSel.addEventListener('change', () => {
+  previewScale = Number(previewSel.value);
+  engine.setResolution(previewScale);
+  redraw();
+});
+sImg.appendChild(previewSel);
+engine.setResolution(previewScale);
+
 // Estilo
 const sSt = section('Estilo');
 const styleSel = document.createElement('select');
@@ -188,9 +235,9 @@ tlScrub.addEventListener('change', () => {
 });
 function updateTimeline() {
   const dur = projectDuration();
-  btnPlayAll.textContent = clockPlaying ? '❚❚ Pausa' : '▶︎ Reproducir';
-  if (!tlScrubbing) tlScrub.value = String((clock / dur) * 1000);
-  tlLabel.textContent = `${fmtTime(clock)} / ${fmtTime(dur)}`;
+  setText(btnPlayAll, clockPlaying ? '❚❚ Pausa' : '▶︎ Reproducir');
+  if (!tlScrubbing) setValue(tlScrub, String(Math.round((clock / dur) * 1000)));
+  setText(tlLabel, `${fmtTime(clock)} / ${fmtTime(dur)}`);
   durSlider.disabled = !!audio.buffer;
   durHint.hidden = !audio.buffer;
 }
@@ -233,9 +280,9 @@ function updateTransport() {
   transport.hidden = !animated;
   sTr.hidden = !animated;
   if (!media || !animated) return;
-  btnPlay.textContent = clockPlaying ? '❚❚ Pausa' : '▶︎ Reproducir';
-  if (!scrubbing) timeline.value = String((media.time / media.duration) * 1000);
-  timeLabel.textContent = `${fmt(media.time)} / ${fmt(media.duration)}`;
+  setText(btnPlay, clockPlaying ? '❚❚ Pausa' : '▶︎ Reproducir');
+  if (!scrubbing) setValue(timeline, String(Math.round((media.time / media.duration) * 1000)));
+  setText(timeLabel, `${fmt(media.time)} / ${fmt(media.duration)}`);
 }
 sTr.hidden = true;
 
@@ -294,6 +341,20 @@ slider(sCo, 'Saturación', 'saturation', 0, 3, 0.01);
 slider(sCo, 'Gamma', 'gamma', 0.4, 2.5, 0.01);
 const rowBoost = slider(sCo, 'Intensidad del carácter', 'glyphBoost', 0.5, 2, 0.01);
 const rowMono = color(sCo, 'Color monocromo', 'monoColor');
+const monoInput = rowMono.querySelector('input') as HTMLInputElement;
+const monoPresets = document.createElement('div');
+monoPresets.className = 'two';
+for (const [name, c] of [['Blanco', '#f2f2f2'], ['Verde terminal', '#33ff66'], ['Ámbar', '#ffb000'], ['Cian', '#33ddff']]) {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.addEventListener('click', () => {
+    params.monoColor = c;
+    monoInput.value = c;
+    redraw();
+  });
+  monoPresets.appendChild(b);
+}
+sCo.appendChild(monoPresets);
 
 // Paleta y tramado (pixel art / dithering)
 const sPal = section('Paleta y tramado');
@@ -357,7 +418,7 @@ function setStyle(v: number) {
   sCh.hidden = grid;
   sPal.hidden = !grid;
   rowBoost.hidden = rowMono.hidden = rowBgMix.hidden = grid;
-  rowMono.hidden = v !== 1;
+  rowMono.hidden = monoPresets.hidden = v !== 1;
   rowCell.hidden = false;
   redraw();
 }
@@ -396,13 +457,16 @@ function animActive() {
   );
 }
 async function exportFrame(): Promise<Blob> {
+  engine.setResolution(1); // el PNG siempre sale a 1080×1920
   engine.render(params, currentAnim()); // y se copia en la misma tarea, antes de que se limpie el búfer
   const out = document.createElement('canvas');
   out.width = OUT_W;
   out.height = OUT_H;
   const c = out.getContext('2d')!;
   c.drawImage(canvas, 0, 0);
-  drawTextLayers(c, project.layers, clock, projectDuration());
+  drawTextLayers(c, project.layers, clock, projectDuration(), undefined, currentAnim().textScale ?? 1);
+  engine.setResolution(previewScale);
+  redraw();
   return new Promise((res, rej) => out.toBlob((b) => (b ? res(b) : rej(new Error('toBlob'))), 'image/png'));
 }
 // Pulso al ritmo: función determinista del tiempo (vale igual en vista previa y exportación).
@@ -464,12 +528,17 @@ meter.className = 'meter';
 const meterBar = document.createElement('div');
 meter.appendChild(meterBar);
 sPu.appendChild(meter);
+let meterW = '';
 function updatePulseUI(level: number) {
-  meterBar.style.width = `${Math.min(level, 1.5) / 1.5 * 100}%`;
+  const w = `${Math.round((Math.min(level, 1.5) / 1.5) * 100)}%`;
+  if (w !== meterW) {
+    meterBar.style.width = w;
+    meterW = w;
+  }
   const needAudio = params.pulseSource !== 'metronome' && !audio.env;
-  pulseHint.textContent = !params.pulseOn
+  setText(pulseHint, !params.pulseOn
     ? 'Desactivado.'
-    : needAudio ? 'Carga un audio (o elige “Metrónomo”) para ver el pulso.' : 'Activo: reacciona al ritmo.';
+    : needAudio ? 'Carga un audio (o elige “Metrónomo”) para ver el pulso.' : 'Activo: reacciona al ritmo.');
 }
 
 const sTx = section('Texto');
@@ -497,12 +566,14 @@ let exporting = false;
 buildExportUI(sEx, {
   begin() {
     const was = { playing: clockPlaying, clock };
+    engine.setResolution(1);
     clockPlaying = false;
     exporting = true;
     audio.stop();
     media?.pause();
     return () => {
       exporting = false;
+      engine.setResolution(previewScale);
       clock = was.clock;
       media?.refresh();
       if (media && media.kind !== 'image') media.seek(clock % media.duration);
@@ -542,30 +613,91 @@ function setMedia(m: Media, label: string) {
   redraw();
 }
 
+// El formato se decide por el contenido (no por la extensión): muchos ".gif" de descargas
+// son en realidad WebP animado o MP4.
+type Sniffed = { kind: 'gif' | 'webp' | 'png' | 'jpeg' | 'video' | 'heic' | 'other'; mime: string };
+async function sniff(f: Blob): Promise<Sniffed> {
+  const b = new Uint8Array(await f.slice(0, 16).arrayBuffer());
+  const at = (i: number, n: number) => String.fromCharCode(...b.slice(i, i + n));
+  if (at(0, 4) === 'GIF8') return { kind: 'gif', mime: 'image/gif' };
+  if (at(0, 4) === 'RIFF' && at(8, 4) === 'WEBP') return { kind: 'webp', mime: 'image/webp' };
+  if (b[0] === 0x89 && at(1, 3) === 'PNG') return { kind: 'png', mime: 'image/png' };
+  if (b[0] === 0xff && b[1] === 0xd8) return { kind: 'jpeg', mime: 'image/jpeg' };
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return { kind: 'video', mime: 'video/webm' };
+  if (at(4, 4) === 'ftyp') {
+    const brand = at(8, 4);
+    if (['heic', 'heix', 'hevc', 'mif1', 'msf1'].includes(brand)) return { kind: 'heic', mime: 'image/heic' };
+    if (brand === 'avif') return { kind: 'other', mime: 'image/avif' };
+    return { kind: 'video', mime: brand === 'qt  ' ? 'video/quicktime' : 'video/mp4' };
+  }
+  return { kind: 'other', mime: f.type };
+}
+
 async function loadFile(f: File) {
+  loadMsg.hidden = true;
+  const still = async () => setMedia(new ImageMedia(await createImageBitmap(f)), f.name);
   try {
-    if (f.type.startsWith('video/')) {
+    const { kind, mime } = await sniff(f);
+    if (kind === 'video') {
       status.textContent = 'Cargando vídeo…';
-      setMedia(await VideoMedia.load(f), f.name);
-    } else if (f.type === 'image/gif') {
-      const gif = await GifMedia.load(f, (i, n) => (status.textContent = `Leyendo GIF… ${i}/${n}`));
-      setMedia(gif, `${f.name} · ${gif.frameCount} fotogramas`);
+      setMedia(await VideoMedia.load(f.slice(0, f.size, mime)), f.name);
+    } else if (kind === 'gif' || kind === 'webp' || kind === 'png') {
+      // Puede ser animado (GIF, WebP, APNG) o fijo.
+      let anim: GifMedia | null = null;
+      if (typeof ImageDecoder !== 'undefined') {
+        try {
+          anim = await GifMedia.load(f.slice(0, f.size, mime), (i, n) => (status.textContent = `Leyendo fotogramas… ${i}/${n}`), mime);
+        } catch {
+          anim = null; // se intentará como imagen fija
+        }
+      } else if (kind === 'gif') {
+        throw new Error('Este navegador no soporta GIF animado. Usa Chrome.');
+      }
+      if (anim && anim.frameCount > 1) setMedia(anim, `${f.name} · ${anim.frameCount} fotogramas`);
+      else {
+        anim?.dispose();
+        await still();
+      }
+    } else if (kind === 'heic') {
+      throw new Error('Chrome no abre HEIC. Expórtala como JPG o PNG.');
     } else {
-      setMedia(new ImageMedia(await createImageBitmap(f)), f.name);
+      await still();
     }
   } catch (e) {
-    status.textContent = e instanceof Error ? e.message : 'No se pudo leer ese archivo';
+    const why = e instanceof Error ? e.message : String(e);
+    loadMsg.textContent = `No se pudo abrir «${f.name}»: ${why}`;
+    loadMsg.hidden = false;
+    status.textContent = 'Error al cargar el archivo';
+    console.error(e);
   }
 }
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   const f = e.dataTransfer?.files[0];
-  if (f && (f.type.startsWith('image/') || f.type.startsWith('video/'))) loadFile(f);
+  if (f) void loadFile(f);
 });
 
 let hits: HitRect[] = [];
-const hasTimedText = () => project.layers.length > 0;
+// Firma del estado visible del texto: cambia cuando una capa aparece/desaparece o está en plena
+// animación de entrada/salida (o late con la música). Así el texto solo se repinta cuando hace falta.
+function overlaySignature(): string {
+  const dur = projectDuration();
+  const pulsing = params.pulseOn && params.pulseText;
+  let sig = project.selected;
+  for (const L of project.layers) {
+    const tOut = L.untilEnd ? dur : L.tOut;
+    if (clock < L.tIn || clock > tOut) {
+      sig += 'h';
+      continue;
+    }
+    const moving =
+      pulsing || (L.animIn !== 'none' && clock < L.tIn + L.animDur) || (L.exitFade > 0 && clock > tOut - L.exitFade);
+    sig += moving ? `|${clock.toFixed(3)}` : 'v';
+  }
+  return sig;
+}
+let overlaySig = '';
 function drawOverlay() {
   octx.clearRect(0, 0, OUT_W, OUT_H);
   hits = drawTextLayers(octx, project.layers, clock, projectDuration(), project.selected, currentAnim().textScale ?? 1);
@@ -621,6 +753,7 @@ function loop() {
         fr.close?.();
         needRender = true;
       })
+      .catch((err) => console.warn('pull', err))
       .finally(() => (pulling = false));
   }
   const now = performance.now();
@@ -630,12 +763,22 @@ function loop() {
     clock = audio.running ? audio.clockTime : clock + dt;
     if (clock >= projectDuration()) restartAll();
   }
-  if (needRender || (clockPlaying && (animActive() || hasTimedText()))) {
+  // Solo se dibuja si algo cambió: parámetros, un fotograma nuevo, una animación en marcha o
+  // texto en transición. Una imagen fija en pausa o sin animaciones no gasta GPU.
+  const sig = overlaySignature();
+  const drawGL = needRender || (clockPlaying && animActive());
+  const drawText = needOverlay || sig !== overlaySig;
+  if (drawGL) {
     needRender = false;
     engine.render(params, currentAnim());
+  }
+  if (drawText) {
+    needOverlay = false;
+    overlaySig = sig;
     drawOverlay();
   }
-  updatePulseUI(pulseLevel(clock));
+  if (params.pulseOn) updatePulseUI(pulseLevel(clock));
+  else updatePulseUI(0);
   audioUI.draw(audio.buffer ? clock : -1);
   updateTimeline();
   updateTransport();

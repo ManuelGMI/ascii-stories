@@ -42,32 +42,58 @@ export function buildAudioUI(
   let peaks: Float32Array | null = null;
   let playhead = -1;
 
-  function draw(ph = playhead) {
-    playhead = ph;
-    ctx.clearRect(0, 0, wave.width, wave.height);
-    const b = audio.buffer;
-    if (!b || !peaks) return;
-    const w = wave.width, h = wave.height;
+  // La onda (fondo, picos, asas) se pinta una vez en `base`; cada fotograma solo se
+  // recompone si cambia la posición del cursor.
+  const base = document.createElement('canvas');
+  base.width = wave.width;
+  base.height = wave.height;
+  const bctx = base.getContext('2d')!;
+  let dirty = true;
+  let lastX = -2;
+
+  function paintBase() {
+    const b = audio.buffer!;
+    const w = base.width, h = base.height;
     const a = (audio.trimStart / b.duration) * w;
     const e = (audio.trimEnd / b.duration) * w;
-    ctx.fillStyle = '#1b1e27';
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#2b3a55';
-    ctx.fillRect(a, 0, e - a, h);
-    for (let i = 0; i < peaks.length; i++) {
-      const inside = i >= a && i <= e;
-      ctx.fillStyle = inside ? '#7fb6ff' : '#4a4f60';
-      const ph2 = Math.max(2, peaks[i] * h * 0.9);
-      ctx.fillRect(i, (h - ph2) / 2, 1, ph2);
+    bctx.clearRect(0, 0, w, h);
+    bctx.fillStyle = '#1b1e27';
+    bctx.fillRect(0, 0, w, h);
+    bctx.fillStyle = '#2b3a55';
+    bctx.fillRect(a, 0, e - a, h);
+    for (let i = 0; i < peaks!.length; i++) {
+      bctx.fillStyle = i >= a && i <= e ? '#7fb6ff' : '#4a4f60';
+      const ph2 = Math.max(2, peaks![i] * h * 0.9);
+      bctx.fillRect(i, (h - ph2) / 2, 1, ph2);
     }
-    ctx.fillStyle = '#ffcc33';
-    ctx.fillRect(a - 2, 0, 4, h);
-    ctx.fillRect(e - 2, 0, 4, h);
-    if (ph >= 0) {
-      const x = ((audio.trimStart + ph) / b.duration) * w;
+    bctx.fillStyle = '#ffcc33';
+    bctx.fillRect(a - 2, 0, 4, h);
+    bctx.fillRect(e - 2, 0, 4, h);
+  }
+
+  function draw(ph = playhead) {
+    playhead = ph;
+    const b = audio.buffer;
+    if (!b || !peaks) {
+      if (lastX !== -3) {
+        ctx.clearRect(0, 0, wave.width, wave.height);
+        lastX = -3;
+      }
+      return;
+    }
+    const x = ph >= 0 ? Math.round(((audio.trimStart + ph) / b.duration) * wave.width) : -1;
+    if (!dirty && x === lastX) return; // nada que repintar
+    if (dirty) {
+      paintBase();
+      dirty = false;
+    }
+    ctx.clearRect(0, 0, wave.width, wave.height);
+    ctx.drawImage(base, 0, 0);
+    if (x >= 0) {
       ctx.fillStyle = '#fff';
-      ctx.fillRect(x - 1, 0, 2, h);
+      ctx.fillRect(x - 1, 0, 2, wave.height);
     }
+    lastX = x;
   }
 
   function sync() {
@@ -79,6 +105,7 @@ export function buildAudioUI(
       return;
     }
     peaks = audio.peaks(wave.width);
+    dirty = true;
     info.textContent = `${audio.name} · ${fmtTime(b.duration)} · recorte ${fmtTime(audio.duration)}`;
     inStart.value = audio.trimStart.toFixed(2);
     inEnd.value = audio.trimEnd.toFixed(2);
@@ -109,6 +136,7 @@ export function buildAudioUI(
     inStart.value = start.toFixed(2);
     inEnd.value = end.toFixed(2);
     info.textContent = `${audio.name} · ${fmtTime(b.duration)} · recorte ${fmtTime(audio.duration)}`;
+    dirty = true;
     draw();
     onTrim(commit);
   }

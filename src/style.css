@@ -35,3 +35,4 @@ textarea.text { resize: vertical; font-family: inherit; }
 .swatches span { width: 18px; height: 18px; border-radius: 4px; border: 1px solid #0006; }
 .meter { height: 8px; background: #1b1e27; border-radius: 4px; overflow: hidden; margin-top: 6px; }
 .meter div { height: 100%; width: 0; background: #ffcc33; }
+.error { color: #ff6b6b; }

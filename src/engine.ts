@@ -77,7 +77,7 @@ export const DEFAULTS: Params = {
   saturation: 1.25,
   gamma: 1,
   invert: false,
-  monoColor: '#33ff66',
+  monoColor: '#f2f2f2', // blanco "noir"; ámbar y verde terminal están en los atajos del panel
   bgColor: '#05060a',
   bgMix: 0.08,
   glyphBoost: 1.15,
@@ -172,8 +172,23 @@ export class Engine {
   private fboTex: WebGLTexture;
   private fbo: WebGLFramebuffer;
   private vao: WebGLVertexArrayObject;
+  private scale = 1; // resolución de render respecto a 1080×1920 (la vista previa puede ser menor)
   private atlas: Atlas | null = null;
   private atlasCharset = '';
+
+  private get W() { return Math.round(OUT_W * this.scale); }
+  private get H() { return Math.round(OUT_H * this.scale); }
+
+  /** Cambia la resolución de render (1 = 1080×1920). Los parámetros en px se escalan solos. */
+  setResolution(scale: number) {
+    if (scale === this.scale) return;
+    this.scale = scale;
+    const gl = this.gl;
+    this.canvas.width = this.W;
+    this.canvas.height = this.H;
+    gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.W, this.H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  }
 
   constructor(readonly canvas: HTMLCanvasElement) {
     canvas.width = OUT_W;
@@ -312,18 +327,19 @@ export class Engine {
 
     // Pasada 2: bloom + scanlines → lienzo
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, OUT_W, OUT_H);
+    gl.viewport(0, 0, this.W, this.H);
     const b = this.post;
     b.use();
     b.i('u_tex', 0);
-    b.v2('u_res', OUT_W, OUT_H);
+    b.v2('u_res', this.W, this.H);
     const L = anim.level ?? 0;
     b.f('u_bloom', p.bloom + L * p.pulseGlow);
     b.f('u_gain', 1 + L * p.pulseGlow * 0.35);
     b.f('u_scan', p.scanlines);
-    b.f('u_scanPeriod', p.scanPeriod);
+    b.f('u_scanPeriod', p.scanPeriod * this.scale);
+    b.f('u_lodBias', Math.log2(this.scale));
     b.f('u_time', anim.time);
-    b.f('u_scanSpeed', p.scanSpeed);
+    b.f('u_scanSpeed', p.scanSpeed * this.scale);
     b.f('u_bar', p.scanBar);
     b.f('u_flash', p.crtFlash);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -334,7 +350,7 @@ export class Engine {
     const gl = this.gl;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
-    gl.viewport(0, 0, OUT_W, OUT_H);
+    gl.viewport(0, 0, this.W, this.H);
     const a = this.ascii;
     a.use();
     gl.activeTexture(gl.TEXTURE0);
@@ -343,9 +359,9 @@ export class Engine {
     gl.bindTexture(gl.TEXTURE_2D, this.atlasTex);
     a.i('u_src', 0);
     a.i('u_atlas', 1);
-    a.v2('u_res', OUT_W, OUT_H);
+    a.v2('u_res', this.W, this.H);
     a.v2('u_srcSize', this.rawW, this.rawH);
-    a.v2('u_cell', p.cell, p.cell * CELL_ASPECT);
+    a.v2('u_cell', p.cell * this.scale, p.cell * CELL_ASPECT * this.scale);
     a.f('u_n', this.atlas!.rampCount);
     a.f('u_edgeStrength', p.edgeStrength);
     a.f('u_edgeThreshold', p.edgeThreshold);
@@ -371,16 +387,16 @@ export class Engine {
   /** Pasada 1 (pixel art / dithering): píxeles cuadrados con paleta → textura intermedia. */
   private passPixel(p: Params, anim: Anim) {
     const gl = this.gl;
-    const px = p.cell;
+    const px = p.cell * this.scale;
     const pal = resolvePalette(p.palette, p.customPalette);
-    const gw = Math.ceil(OUT_W / px), gh = Math.ceil(OUT_H / px);
+    const gw = Math.ceil(this.W / px), gh = Math.ceil(this.H / px);
     const cpu = p.ditherMode >= 2 && pal.length > 0;
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.acc[this.cur]);
     const setCommon = (prog: Program) => {
       prog.i('u_src', 0);
-      prog.v2('u_res', OUT_W, OUT_H);
+      prog.v2('u_res', this.W, this.H);
       prog.v2('u_srcSize', this.rawW, this.rawH);
       prog.v2('u_cell', px, px);
       prog.f('u_brightness', p.brightness + (anim.level ?? 0) * p.pulseBright);
@@ -421,7 +437,7 @@ export class Engine {
     }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
-    gl.viewport(0, 0, OUT_W, OUT_H);
+    gl.viewport(0, 0, this.W, this.H);
     const q = this.pixel;
     q.use();
     setCommon(q);
