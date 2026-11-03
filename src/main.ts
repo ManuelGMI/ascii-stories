@@ -49,11 +49,36 @@ function setValue(el: HTMLInputElement, v: string) {
 }
 
 // ---------- Construcción de controles ----------
-function section(title: string) {
+type Tab = 'media' | 'style' | 'text' | 'audio' | 'anim' | 'export';
+const TABS: [Tab, string, string][] = [
+  ['media', '🖼', 'Imagen'], ['style', '🎨', 'Estilo'], ['text', 'Aa', 'Texto'],
+  ['audio', '♪', 'Audio'], ['anim', '✦', 'Animar'], ['export', '⬆', 'Exportar'],
+];
+function section(title: string, tab: Tab) {
   const s = document.createElement('section');
+  s.dataset.tab = tab;
   s.innerHTML = `<h2>${title}</h2>`;
   panel.appendChild(s);
   return s;
+}
+
+// Pestañas: cada sección vive en una; solo se ve la activa.
+const tabsNav = document.createElement('nav');
+tabsNav.id = 'tabs';
+const tabButtons = new Map<Tab, HTMLButtonElement>();
+for (const [id, ico, name] of TABS) {
+  const b = document.createElement('button');
+  b.innerHTML = `<span class="ico">${ico}</span><span>${name}</span>`;
+  b.addEventListener('click', () => showTab(id));
+  tabButtons.set(id, b);
+  tabsNav.appendChild(b);
+}
+panel.querySelector('h1')!.after(tabsNav);
+function showTab(t: Tab) {
+  panel.querySelectorAll<HTMLElement>('section').forEach((s) => s.classList.toggle('tab-off', s.dataset.tab !== t));
+  tabButtons.forEach((b, id) => b.classList.toggle('active', id === t));
+  if (matchMedia('(max-width: 820px)').matches) window.scrollTo({ top: 0 });
+  else panel.scrollTo({ top: 0 });
 }
 
 // Controles enlazados a `params`; refreshControls() los resincroniza tras cambios por código.
@@ -64,34 +89,12 @@ function slider(
   s: HTMLElement, label: string, key: keyof Params,
   min: number, max: number, step: number,
 ): HTMLElement {
-  const row = document.createElement('label');
-  row.className = 'row';
-  const val = document.createElement('span');
-  val.className = 'val';
-  const input = document.createElement('input');
-  input.type = 'range';
-  input.min = String(min);
-  input.max = String(max);
-  input.step = String(step);
-  input.value = String(params[key]);
-  const upd = () => (val.textContent = Number(input.value).toFixed(step < 1 ? 2 : 0));
-  upd();
+  const input = uiSlider(s, label, params as unknown as Record<string, unknown>, key, min, max, step, redraw, DEFAULTS[key] as number);
   refreshers.push(() => {
     input.value = String(params[key]);
-    upd();
+    input.dispatchEvent(new Event('refresh'));
   });
-  input.addEventListener('input', () => {
-    (params[key] as number) = Number(input.value);
-    upd();
-    redraw();
-  });
-  input.addEventListener('dblclick', () => {
-    input.value = String(DEFAULTS[key]);
-    input.dispatchEvent(new Event('input'));
-  });
-  row.append(Object.assign(document.createElement('span'), { textContent: label }), val, input);
-  s.appendChild(row);
-  return row;
+  return input.parentElement as HTMLElement;
 }
 
 function checkbox(s: HTMLElement, label: string, key: 'invert' | 'revealLoop' | 'pulseOn' | 'pulseText') {
@@ -124,7 +127,7 @@ function color(s: HTMLElement, label: string, key: 'monoColor' | 'bgColor'): HTM
 }
 
 // Imagen
-const sImg = section('Imagen');
+const sImg = section('Imagen', 'media');
 const file = document.createElement('input');
 file.type = 'file';
 file.accept = 'image/*,video/*'; // en iOS así ofrece la fototeca
@@ -133,7 +136,7 @@ file.addEventListener('change', () => {
   file.value = ''; // permite volver a elegir el mismo archivo
   if (f) void loadFile(f);
 });
-fileButton(sImg, 'Elegir foto, GIF o vídeo…', file);
+fileButton(sImg, 'Elegir foto, GIF o vídeo…', file).classList.add('primary');
 const loadMsg = document.createElement('p');
 loadMsg.className = 'hint error';
 loadMsg.hidden = true;
@@ -163,11 +166,52 @@ sImg.appendChild(previewSel);
 engine.setResolution(previewScale);
 
 // Estilo
-const sSt = section('Estilo');
+const sSt = section('Estilo', 'style');
 const styleSel = document.createElement('select');
 ['ASCII a color', 'ASCII monocromo', 'Pixel art', 'Dithering (tramado)'].forEach((n, i) => styleSel.add(new Option(n, String(i))));
 sSt.appendChild(styleSel);
 styleSel.addEventListener('change', () => setStyle(Number(styleSel.value)));
+// El tamaño vive aquí (y no en «Caracteres») porque también manda en pixel art y dithering.
+const rowCell = slider(sSt, 'Tamaño de celda / píxel (px)', 'cell', 3, 40, 1);
+
+// Looks: puntos de partida de un toque (estilo + ajustes), para luego afinar.
+interface Look { name: string; swatch: string; style: number; set: Partial<Params> }
+const LOOKS: Look[] = [
+  { name: 'Clásico color', swatch: 'linear-gradient(135deg,#33ddff,#ff4d8d,#ffb000)', style: 0, set: {} },
+  { name: 'Terminal', swatch: '#33ff66', style: 1, set: { monoColor: '#33ff66', bloom: 1.2, scanlines: 0.35, contrast: 1.2 } },
+  { name: 'Noir', swatch: '#f2f2f2', style: 1, set: { monoColor: '#f2f2f2', contrast: 1.35, bgMix: 0, bloom: 0.4, scanlines: 0.12 } },
+  { name: 'Matrix', swatch: 'linear-gradient(135deg,#052,#33ff66)', style: 1, set: { monoColor: '#33ff66', bloom: 1.4, reveal: 6, revealDuration: 5, flicker: 0.12, scanlines: 0.3 } },
+  { name: 'CRT retro', swatch: 'linear-gradient(135deg,#ff4d8d,#ffb000)', style: 0, set: { scanlines: 0.5, bloom: 1.3, crtFlash: 0.35, scanBar: 0.4, saturation: 1.5 } },
+  { name: 'Ámbar', swatch: '#ffb000', style: 1, set: { monoColor: '#ffb000', bloom: 1, scanlines: 0.4, contrast: 1.25 } },
+  { name: 'Game Boy', swatch: 'linear-gradient(135deg,#0f380f,#9bbc0f)', style: 2, set: { palette: 'Game Boy', ditherMode: 1, bayerLevels: 2, ditherAmount: 1, cell: 6, scanlines: 0.1, bloom: 0.2 } },
+  { name: 'Pixel PICO-8', swatch: 'linear-gradient(135deg,#29adff,#ff004d)', style: 2, set: { palette: 'PICO-8', ditherMode: 0, cell: 6, scanlines: 0.1, bloom: 0.2 } },
+  { name: 'Dither B/N', swatch: 'linear-gradient(135deg,#000,#fff)', style: 3, set: { palette: 'Blanco y negro', ditherMode: 2, ditherAmount: 1, cell: 4, scanlines: 0, bloom: 0 } },
+];
+const LOOK_RESET: (keyof Params)[] = [
+  'brightness', 'contrast', 'saturation', 'gamma', 'invert', 'bgMix', 'glyphBoost', 'edgeThreshold',
+  'scanlines', 'scanPeriod', 'bloom', 'reveal', 'flicker', 'scanSpeed', 'scanBar', 'crtFlash',
+];
+const sLook = section('Looks — un toque', 'style');
+const looksGrid = document.createElement('div');
+looksGrid.className = 'looks';
+for (const L of LOOKS) {
+  const b = document.createElement('button');
+  b.innerHTML = `<span class="sw" style="background:${L.swatch}"></span>${L.name}`;
+  b.addEventListener('click', () => applyLook(L));
+  looksGrid.appendChild(b);
+}
+sLook.append(looksGrid, Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Cada look reinicia los ajustes visuales; después puedes afinarlos abajo.' }));
+function applyLook(L: Look) {
+  for (const k of LOOK_RESET) (params as unknown as Record<string, unknown>)[k] = DEFAULTS[k];
+  setStyle(L.style); // ajusta tamaño de celda, paleta y tramado por defecto del estilo
+  Object.assign(params, L.set);
+  revealSel.value = String(params.reveal);
+  monoInput.value = params.monoColor;
+  refreshControls();
+  syncPaletteUI();
+  restartClock();
+  redraw();
+}
 
 // Línea de tiempo del proyecto: gobierna revelado, textos y audio.
 const project: Project = { layers: [newLayer()], selected: '' };
@@ -176,28 +220,34 @@ const story = { duration: 15 };
 const audio = new AudioTrack();
 const projectDuration = () => (audio.buffer ? audio.duration : story.duration);
 
-const sTl = section('Línea de tiempo');
-const tlRow = document.createElement('div');
-tlRow.className = 'two';
-const btnPlayAll = Object.assign(document.createElement('button'), { textContent: '❚❚ Pausa' });
-const btnRestart = Object.assign(document.createElement('button'), { textContent: '↺ Reiniciar' });
-tlRow.append(btnPlayAll, btnRestart);
+// Barra de tiempo: siempre visible bajo la vista previa.
+const timebar = document.getElementById('timebar') as HTMLElement;
+const btnRestart = Object.assign(document.createElement('button'), { textContent: '↺', title: 'Reiniciar' });
+const btnPlayAll = Object.assign(document.createElement('button'), { textContent: '❚❚', title: 'Reproducir / pausar', className: 'play' });
+btnRestart.setAttribute('aria-label', 'Reiniciar');
+btnPlayAll.setAttribute('aria-label', 'Reproducir o pausar');
 const tlScrub = document.createElement('input');
 tlScrub.type = 'range';
 tlScrub.min = '0';
 tlScrub.max = '1000';
 tlScrub.value = '0';
+tlScrub.setAttribute('aria-label', 'Posición en la línea de tiempo');
 const tlLabel = document.createElement('span');
 tlLabel.className = 'val';
-sTl.append(tlRow, tlScrub, tlLabel);
-const durRow = document.createElement('div');
-sTl.appendChild(durRow);
-const durSlider = uiSlider(durRow, 'Duración de la historia (s)', story, 'duration', 3, 60, 0.5, () => redraw(), 15);
+timebar.append(btnRestart, btnPlayAll, tlScrub, tlLabel);
+
+// Botón para ampliar / reducir la vista previa (móvil)
+const sizeBtn = Object.assign(document.createElement('button'), { textContent: '⤢', className: 'sizebtn', title: 'Ampliar vista previa' });
+sizeBtn.addEventListener('click', () => document.body.classList.toggle('bigpreview'));
+(document.querySelector('.stage') as HTMLElement).appendChild(sizeBtn);
+
+const sDur = section('Duración de la historia', 'export');
+const durSlider = uiSlider(sDur, 'Duración (s)', story, 'duration', 3, 60, 0.5, () => redraw(), 15);
 const durHint = document.createElement('p');
 durHint.className = 'hint';
-durHint.textContent = 'La duración sigue el recorte del audio.';
+durHint.textContent = 'Con audio cargado, la duración es la del recorte.';
 durHint.hidden = true;
-sTl.appendChild(durHint);
+sDur.appendChild(durHint);
 
 let clock = 0;
 let clockPlaying = true;
@@ -236,7 +286,7 @@ tlScrub.addEventListener('change', () => {
 });
 function updateTimeline() {
   const dur = projectDuration();
-  setText(btnPlayAll, clockPlaying ? '❚❚ Pausa' : '▶︎ Reproducir');
+  setText(btnPlayAll, clockPlaying ? '❚❚' : '▶︎');
   if (!tlScrubbing) setValue(tlScrub, String(Math.round((clock / dur) * 1000)));
   setText(tlLabel, `${fmtTime(clock)} / ${fmtTime(dur)}`);
   durSlider.disabled = !!audio.buffer;
@@ -244,7 +294,7 @@ function updateTimeline() {
 }
 
 // Transporte (vídeo / GIF)
-const sTr = section('Reproducción');
+const sTr = section('Reproducción de vídeo / GIF', 'media');
 const transport = document.createElement('div');
 sTr.appendChild(transport);
 transport.className = 'transport';
@@ -297,11 +347,9 @@ btnPng.addEventListener('click', async () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 });
-sImg.appendChild(btnPng);
 
 // Caracteres
-const sCh = section('Caracteres');
-const rowCell = slider(sCh, 'Tamaño de celda / píxel (px)', 'cell', 3, 40, 1);
+const sCh = section('Caracteres', 'style');
 const preset = document.createElement('select');
 for (const name of Object.keys(CHARSETS)) preset.add(new Option(name, name));
 preset.add(new Option('Personalizado', ''));
@@ -330,12 +378,12 @@ sCh.append(preset, custom);
 checkbox(sCh, 'Invertir luminosidad', 'invert');
 
 // Bordes
-const sEd = section('Bordes y contornos');
+const sEd = section('Bordes y contornos', 'style');
 slider(sEd, 'Intensidad (0 = off)', 'edgeStrength', 0, 10, 0.1);
 slider(sEd, 'Umbral', 'edgeThreshold', 0, 1.5, 0.01);
 
 // Color
-const sCo = section('Color');
+const sCo = section('Color', 'style');
 slider(sCo, 'Brillo', 'brightness', -0.5, 0.5, 0.01);
 slider(sCo, 'Contraste', 'contrast', 0.3, 2.5, 0.01);
 slider(sCo, 'Saturación', 'saturation', 0, 3, 0.01);
@@ -358,7 +406,7 @@ for (const [name, c] of [['Blanco', '#f2f2f2'], ['Verde terminal', '#33ff66'], [
 sCo.appendChild(monoPresets);
 
 // Paleta y tramado (pixel art / dithering)
-const sPal = section('Paleta y tramado');
+const sPal = section('Paleta y tramado', 'style');
 const palSel = document.createElement('select');
 for (const n of [...Object.keys(PALETTES), CUSTOM_PALETTE, NO_PALETTE]) palSel.add(new Option(n, n));
 const palCustom = document.createElement('input');
@@ -425,14 +473,14 @@ function setStyle(v: number) {
 }
 
 // Fondo y efectos
-const sFx = section('Fondo y efectos');
+const sFx = section('Fondo y efectos', 'style');
 color(sFx, 'Color de fondo', 'bgColor');
 const rowBgMix = slider(sFx, 'Imagen tenue en el fondo', 'bgMix', 0, 0.6, 0.01);
 slider(sFx, 'Scanlines', 'scanlines', 0, 1, 0.01);
 slider(sFx, 'Grosor scanline (px)', 'scanPeriod', 2, 16, 1);
 slider(sFx, 'Brillo CRT (bloom)', 'bloom', 0, 3, 0.01);
 
-const sAn = section('Animación');
+const sAn = section('Revelado y efectos animados', 'anim');
 const revealSel = document.createElement('select');
 ['Sin revelado', 'Carácter a carácter (aleatorio)', 'Escritura (línea a línea)', 'Barrido →', 'Barrido ↓', 'Radial desde el centro', 'Lluvia Matrix']
   .forEach((n, i) => revealSel.add(new Option(n, String(i))));
@@ -501,7 +549,7 @@ function currentAnim(t = clock): Anim {
   };
 }
 
-const sPu = section('Pulso al ritmo');
+const sPu = section('Pulso al ritmo', 'audio');
 checkbox(sPu, 'Activar pulso', 'pulseOn');
 const pulseSel = document.createElement('select');
 [['bass', 'Graves (bombo)'], ['mid', 'Medios'], ['high', 'Agudos'], ['vol', 'Volumen general'], ['beat', 'Golpes (beats detectados)'], ['metronome', 'Metrónomo (sin audio)']]
@@ -542,10 +590,10 @@ function updatePulseUI(level: number) {
     : needAudio ? 'Carga un audio (o elige “Metrónomo”) para ver el pulso.' : 'Activo: reacciona al ritmo.');
 }
 
-const sTx = section('Texto');
+const sTx = section('Texto', 'text');
 const textUI = buildTextUI(sTx, project, projectDuration, redraw);
 
-const sAu = section('Audio');
+const sAu = section('Audio', 'audio');
 const audioUI = buildAudioUI(
   sAu, audio,
   () => { if (clockPlaying) audio.playFrom(0); clock = 0; redraw(); },
@@ -557,12 +605,15 @@ const audioUI = buildAudioUI(
   () => redraw(),
 );
 
-const sVid = section('Vídeo / GIF');
+panel.insertBefore(sAu, sPu);
+
+const sVid = section('Suavizado de vídeo / GIF', 'anim');
 slider(sVid, 'Suavizado temporal (0 = off)', 'smooth', 0, 0.9, 0.01);
 
 setStyle(0);
 
-const sEx = section('Exportar');
+
+const sEx = section('Exportar', 'export');
 let exporting = false;
 buildExportUI(sEx, {
   begin() {
@@ -596,10 +647,14 @@ buildExportUI(sEx, {
   }),
 });
 
+sEx.appendChild(btnPng);
+
+const sMore = section('Más', 'media');
 const btnReset = document.createElement('button');
 btnReset.textContent = 'Restablecer';
 btnReset.addEventListener('click', () => location.reload());
-panel.appendChild(btnReset);
+sMore.appendChild(btnReset);
+showTab('media');
 
 // ---------- Carga de medios ----------
 let media: Media | null = null;
@@ -798,7 +853,7 @@ function loop() {
 }
 
 setMedia(new ImageMedia(makeDemoImage()), 'Imagen de prueba');
-status.textContent = 'Imagen de prueba · arrastra una foto, GIF o vídeo, o usa el selector';
+status.textContent = 'Imagen de prueba · elige la tuya en «Imagen» (o arrástrala aquí)';
 loop();
 
 if (import.meta.env.DEV) (window as unknown as { __app: unknown }).__app = { audio, pulseLevel, params };

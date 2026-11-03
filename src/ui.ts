@@ -14,22 +14,44 @@ export function slider(
   parent: HTMLElement, label: string, obj: Obj, key: string,
   min: number, max: number, step: number, onChange: () => void, def?: number,
 ) {
+  const decimals = Math.max(0, -Math.floor(Math.log10(step)));
   const val = el('span', { className: 'val' });
   const input = el('input', { type: 'range', min: String(min), max: String(max), step: String(step), value: String(obj[key]) });
-  const upd = () => (val.textContent = Number(input.value).toFixed(step < 1 ? (step < 0.01 ? 3 : 2) : 0));
+  input.setAttribute('aria-label', label);
+  const upd = () => (val.textContent = Number(input.value).toFixed(decimals));
   upd();
   input.addEventListener('input', () => {
     obj[key] = Number(input.value);
     upd();
     onChange();
   });
+  // Cambio desde código (looks, restablecer…): actualiza solo la etiqueta, sin llamar a onChange.
+  input.addEventListener('refresh', upd);
   if (def !== undefined) {
     input.addEventListener('dblclick', () => {
       input.value = String(def);
       input.dispatchEvent(new Event('input'));
     });
   }
-  parent.appendChild(el('label', { className: 'row' }, el('span', { textContent: label }), val, input));
+  // Botones − / + para ajustar con precisión con el dedo (en ordenador se ocultan por CSS).
+  const nudge = (dir: number) => {
+    const v = Math.min(max, Math.max(min, Number(input.value) + dir * step));
+    input.value = v.toFixed(decimals);
+    input.dispatchEvent(new Event('input'));
+  };
+  const minus = el('button', { textContent: '−', className: 'step-btn', type: 'button' });
+  const plus = el('button', { textContent: '+', className: 'step-btn', type: 'button' });
+  minus.setAttribute('aria-label', `Menos ${label}`);
+  plus.setAttribute('aria-label', `Más ${label}`);
+  minus.addEventListener('click', () => nudge(-1));
+  plus.addEventListener('click', () => nudge(1));
+  // div (no label): un botón dentro de un label activaría el primer botón al tocar el texto.
+  parent.appendChild(
+    el('div', { className: 'row' },
+      el('span', { textContent: label, className: 'lbl' }),
+      el('span', { className: 'ctl' }, minus, val, plus),
+      input),
+  );
   return input;
 }
 

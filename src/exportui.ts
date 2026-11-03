@@ -47,7 +47,7 @@ export function buildExportUI(parent: HTMLElement, hooks: ExportHooks) {
     gifBox.hidden = fmt.value !== 'gif';
   });
 
-  const go = el('button', { textContent: 'Exportar' });
+  const go = el('button', { textContent: 'Exportar', className: 'primary' });
   const msg = el('p', { className: 'hint' });
   const result = el('div', { className: 'two' });
   result.hidden = true;
