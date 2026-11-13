@@ -234,7 +234,23 @@ tlScrub.value = '0';
 tlScrub.setAttribute('aria-label', 'Posición en la línea de tiempo');
 const tlLabel = document.createElement('span');
 tlLabel.className = 'val';
-timebar.append(btnRestart, btnPlayAll, tlScrub, tlLabel);
+const btnTheme = Object.assign(document.createElement('button'), { className: 'theme' });
+function paintTheme() {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  btnTheme.textContent = dark ? '☀︎' : '☾';
+  btnTheme.title = dark ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro';
+  btnTheme.setAttribute('aria-label', btnTheme.title);
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#0d0e12' : '#eef0f4');
+}
+btnTheme.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('theme', next); } catch { /* sin almacenamiento */ }
+  paintTheme();
+  window.dispatchEvent(new Event('themechange'));
+});
+paintTheme();
+timebar.append(btnRestart, btnPlayAll, tlScrub, tlLabel, btnTheme);
 
 // Botón para ampliar / reducir la vista previa (móvil)
 const sizeBtn = Object.assign(document.createElement('button'), { textContent: '⤢', className: 'sizebtn', title: 'Ampliar vista previa' });
@@ -250,7 +266,7 @@ durHint.hidden = true;
 sDur.appendChild(durHint);
 
 let clock = 0;
-let clockPlaying = true;
+let clockPlaying = false; // arranca en pausa: la imagen de prueba no necesita reproducirse sola
 let lastNow = performance.now();
 let tlScrubbing = false;
 
@@ -669,6 +685,7 @@ function setMedia(m: Media, label: string) {
     durSlider.dispatchEvent(new Event('input'));
   }
   clock = 0;
+  if (clockPlaying) m.play(); else m.pause();
   status.textContent = `${label} · ${m.width}×${m.height}` + (m.kind !== 'image' ? ` · ${fmt(m.duration)}` : '');
   redraw();
 }

@@ -49,7 +49,9 @@ export function buildAudioUI(
   base.width = wave.width;
   base.height = wave.height;
   const bctx = base.getContext('2d')!;
+  const isDark = () => document.documentElement.dataset.theme === 'dark';
   let dirty = true;
+  window.addEventListener('themechange', () => { dirty = true; });
   let lastX = -2;
 
   function paintBase() {
@@ -57,13 +59,14 @@ export function buildAudioUI(
     const w = base.width, h = base.height;
     const a = (audio.trimStart / b.duration) * w;
     const e = (audio.trimEnd / b.duration) * w;
+    const dark = isDark();
     bctx.clearRect(0, 0, w, h);
-    bctx.fillStyle = '#1b1e27';
+    bctx.fillStyle = dark ? '#1b1e27' : '#e4e8f0';
     bctx.fillRect(0, 0, w, h);
-    bctx.fillStyle = '#2b3a55';
+    bctx.fillStyle = dark ? '#2b3a55' : '#cfe0fb';
     bctx.fillRect(a, 0, e - a, h);
     for (let i = 0; i < peaks!.length; i++) {
-      bctx.fillStyle = i >= a && i <= e ? '#7fb6ff' : '#4a4f60';
+      bctx.fillStyle = i >= a && i <= e ? (dark ? '#7fb6ff' : '#2f6fe0') : (dark ? '#4a4f60' : '#aab0c0');
       const ph2 = Math.max(2, peaks![i] * h * 0.9);
       bctx.fillRect(i, (h - ph2) / 2, 1, ph2);
     }
@@ -91,7 +94,7 @@ export function buildAudioUI(
     ctx.clearRect(0, 0, wave.width, wave.height);
     ctx.drawImage(base, 0, 0);
     if (x >= 0) {
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = isDark() ? '#fff' : '#1c1e26';
       ctx.fillRect(x - 1, 0, 2, wave.height);
     }
     lastX = x;
