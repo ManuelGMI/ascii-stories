@@ -313,9 +313,19 @@ export class Engine {
     this.setFilter(this.atlasTex, true);
   }
 
+  /** Lienzo vacío: solo se pinta el gris claro, sin pasar por el filtro ASCII. */
+  blank = false;
+
   render(p: Params, anim: Anim = { time: 0, progress: 1 }) {
     if (!this.hasAcc) return;
     const gl = this.gl;
+    if (this.blank) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, this.W, this.H);
+      gl.clearColor(0.89, 0.894, 0.91, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      return;
+    }
     this.ensureAtlas(p.charset);
     gl.bindVertexArray(this.vao);
     if (p.style >= 2) this.passPixel(p, anim);

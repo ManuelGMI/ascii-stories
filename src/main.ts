@@ -1,6 +1,6 @@
 import './style.css';
 import { CHARSETS } from './atlas';
-import { makeDemoImage } from './demo';
+import { makeBlankCanvas } from './demo';
 import { DEFAULTS, Engine, OUT_H, OUT_W, revealProgress, type Anim, type Params } from './engine';
 import { GifMedia, ImageMedia, JsGifMedia, VideoMedia, type Media } from './media';
 import { buildCurve, sampleCurve, type PulseSource } from './analysis';
@@ -143,10 +143,10 @@ loadMsg.hidden = true;
 sImg.appendChild(loadMsg);
 const btnRemove = document.createElement('button');
 btnRemove.textContent = 'Quitar imagen';
-btnRemove.title = 'Vuelve a la imagen de prueba';
+btnRemove.title = 'Vuelve al lienzo gris vacío';
 btnRemove.addEventListener('click', () => {
   loadMsg.hidden = true;
-  setMedia(new ImageMedia(makeDemoImage()), 'Imagen de prueba');
+  setMedia(new ImageMedia(makeBlankCanvas()), 'Lienzo en blanco', true);
 });
 sImg.appendChild(btnRemove);
 // Vista previa: la exportación siempre es 1080×1920; la vista previa puede renderizarse a menos
@@ -266,7 +266,7 @@ durHint.hidden = true;
 sDur.appendChild(durHint);
 
 let clock = 0;
-let clockPlaying = false; // arranca en pausa: la imagen de prueba no necesita reproducirse sola
+let clockPlaying = false; // arranca en pausa: no hay nada que reproducir hasta cargar algo
 let lastNow = performance.now();
 let tlScrubbing = false;
 
@@ -676,9 +676,10 @@ showTab('media');
 let media: Media | null = null;
 let pulling = false;
 
-function setMedia(m: Media, label: string) {
+function setMedia(m: Media, label: string, blank = false) {
   media?.dispose();
   media = m;
+  engine.blank = blank;
   if (m.kind !== 'image') {
     // La historia dura lo que el vídeo / GIF (entre 3 y 60 s); se puede cambiar después.
     durSlider.value = String(Math.min(60, Math.max(3, Math.round(m.duration * 2) / 2)));
@@ -869,8 +870,8 @@ function loop() {
   updateTransport();
 }
 
-setMedia(new ImageMedia(makeDemoImage()), 'Imagen de prueba');
-status.textContent = 'Imagen de prueba · elige la tuya en «Imagen» (o arrástrala aquí)';
+setMedia(new ImageMedia(makeBlankCanvas()), 'Lienzo en blanco', true);
+status.textContent = 'Lienzo vacío · elige tu imagen en «Imagen» (o arrástrala aquí)';
 loop();
 
 if (import.meta.env.DEV) (window as unknown as { __app: unknown }).__app = { audio, pulseLevel, params };
