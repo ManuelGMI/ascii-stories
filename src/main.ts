@@ -127,6 +127,7 @@ function color(s: HTMLElement, label: string, key: 'monoColor' | 'bgColor'): HTM
 }
 
 // Imagen
+let media: Media | null = null;
 const sImg = section('Imagen', 'media');
 const file = document.createElement('input');
 file.type = 'file';
@@ -149,6 +150,62 @@ btnRemove.addEventListener('click', () => {
   setMedia(new ImageMedia(makeBlankCanvas()), 'Lienzo en blanco', true);
 });
 sImg.appendChild(btnRemove);
+
+// Encuadre: zoom y posición de la imagen dentro del lienzo 9:16
+const hFrame = document.createElement('h2');
+hFrame.textContent = 'Encuadre';
+sImg.appendChild(hFrame);
+const frameHint = document.createElement('p');
+frameHint.className = 'hint';
+frameHint.textContent = 'En la vista previa: arrastra para mover, rueda o pellizco para el zoom. Doble clic en un slider lo restablece.';
+sImg.appendChild(frameHint);
+// Cuánto mide la imagen respecto al lienzo en cada eje (1 = justo lo que mide el lienzo).
+function imgExtent(zoom = params.imgZoom) {
+  const w = media?.width || 1, h = media?.height || 1;
+  return {
+    x: zoom * Math.max(1, (OUT_H / OUT_W) * (w / h)),
+    y: zoom * Math.max(1, (OUT_W / OUT_H) * (h / w)),
+  };
+}
+// La imagen no puede salirse del lienzo dejando huecos (si es mayor), ni escaparse (si es menor).
+function clampPan() {
+  const e = imgExtent();
+  const lx = Math.abs(e.x - 1) / 2, ly = Math.abs(e.y - 1) / 2;
+  params.imgX = Math.min(lx, Math.max(-lx, params.imgX));
+  params.imgY = Math.min(ly, Math.max(-ly, params.imgY));
+}
+function frameChanged() {
+  clampPan();
+  refreshControls();
+  redraw();
+}
+slider(sImg, 'Zoom', 'imgZoom', 0.25, 4, 0.01).querySelector('input')!.addEventListener('input', frameChanged);
+// Los sliders de movimiento recorren siempre todo el margen permitido (−1 = un extremo, 1 = el otro),
+// sea cual sea el zoom, para que nunca se salgan de rango.
+for (const [label, key, axis] of [['Mover ← →', 'imgX', 'x'], ['Mover ↑ ↓', 'imgY', 'y']] as const) {
+  const limit = () => Math.abs(imgExtent()[axis] - 1) / 2;
+  const proxy = {
+    get v() { return limit() ? params[key] / limit() : 0; },
+    set v(n: number) { params[key] = n * limit(); },
+  };
+  const input = uiSlider(sImg, label, proxy, 'v', -1, 1, 0.01, frameChanged, 0);
+  refreshers.push(() => {
+    input.value = String(proxy.v);
+    input.dispatchEvent(new Event('refresh'));
+  });
+}
+const frameBtns = document.createElement('div');
+frameBtns.className = 'two';
+for (const [label, fn] of [
+  ['Rellenar', () => { params.imgZoom = 1; params.imgX = 0; params.imgY = 0; }],
+  ['Imagen entera', () => { const e = imgExtent(1); params.imgZoom = 1 / Math.max(e.x, e.y); params.imgX = 0; params.imgY = 0; }],
+] as const) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.addEventListener('click', () => { fn(); frameChanged(); });
+  frameBtns.appendChild(b);
+}
+sImg.appendChild(frameBtns);
 // Vista previa: la exportación siempre es 1080×1920; la vista previa puede renderizarse a menos
 // resolución para gastar menos GPU (mismos parámetros, se escalan solos).
 const isTouch = matchMedia('(pointer: coarse)').matches;
@@ -673,13 +730,14 @@ sMore.appendChild(btnReset);
 showTab('media');
 
 // ---------- Carga de medios ----------
-let media: Media | null = null;
 let pulling = false;
 
 function setMedia(m: Media, label: string, blank = false) {
   media?.dispose();
   media = m;
   engine.blank = blank;
+  params.imgZoom = 1; params.imgX = 0; params.imgY = 0; // encuadre nuevo para cada imagen
+  refreshControls();
   if (m.kind !== 'image') {
     // La historia dura lo que el vídeo / GIF (entre 3 y 60 s); se puede cambiar después.
     durSlider.value = String(Math.min(60, Math.max(3, Math.round(m.duration * 2) / 2)));
@@ -789,6 +847,25 @@ function drawOverlay() {
   hits = drawTextLayers(octx, project.layers, clock, projectDuration(), project.selected, currentAnim().textScale ?? 1);
 }
 
+// Mover / ampliar la imagen con el ratón o los dedos
+const pointers = new Map<number, { x: number; y: number }>();
+let pinch: { d: number; z: number } | null = null;
+const pointerMid = () => {
+  const v = [...pointers.values()];
+  return { x: v.reduce((a, q) => a + q.x, 0) / v.length, y: v.reduce((a, q) => a + q.y, 0) / v.length };
+};
+const pointerDist = () => {
+  const [a, b] = [...pointers.values()];
+  return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+};
+// Rueda del ratón o pellizco del trackpad (llega como rueda con ctrlKey)
+overlay.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const k = e.ctrlKey ? 0.01 : 0.0015;
+  params.imgZoom = Math.min(4, Math.max(0.25, params.imgZoom * Math.exp(-e.deltaY * k)));
+  frameChanged();
+}, { passive: false });
+
 // Arrastrar textos sobre la vista previa
 let drag: { id: string; dx: number; dy: number } | null = null;
 const toCanvas = (e: PointerEvent) => {
@@ -799,7 +876,14 @@ overlay.addEventListener('pointerdown', (e) => {
   if (exporting) return;
   const p = toCanvas(e);
   const hit = [...hits].reverse().find((h) => p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h);
-  if (!hit) return;
+  if (!hit) {
+    // Sin texto debajo: se mueve la imagen (un dedo) o se hace zoom (dos dedos)
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    overlay.setPointerCapture(e.pointerId);
+    overlay.classList.add('dragging');
+    pinch = pointers.size === 2 ? { d: pointerDist(), z: params.imgZoom } : null;
+    return;
+  }
   const L = project.layers.find((l) => l.id === hit.id)!;
   project.selected = L.id;
   drag = { id: L.id, dx: p.x - L.x * OUT_W, dy: p.y - L.y * OUT_H };
@@ -809,6 +893,18 @@ overlay.addEventListener('pointerdown', (e) => {
   redraw();
 });
 overlay.addEventListener('pointermove', (e) => {
+  const prev = pointers.get(e.pointerId);
+  if (prev) {
+    const r = overlay.getBoundingClientRect();
+    const before = pointerMid();
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const after = pointerMid();
+    params.imgX += (after.x - before.x) / r.width;
+    params.imgY += (after.y - before.y) / r.height;
+    if (pinch && pointers.size === 2) params.imgZoom = Math.min(4, Math.max(0.25, (pinch.z * pointerDist()) / pinch.d));
+    frameChanged();
+    return;
+  }
   if (!drag) return;
   const L = project.layers.find((l) => l.id === drag!.id);
   if (!L) return;
@@ -817,7 +913,12 @@ overlay.addEventListener('pointermove', (e) => {
   L.y = Math.min(Math.max((p.y - drag.dy) / OUT_H, 0), 1);
   redraw();
 });
-const endDrag = () => {
+const endDrag = (e: PointerEvent) => {
+  if (pointers.delete(e.pointerId)) {
+    pinch = null;
+    if (!pointers.size) overlay.classList.remove('dragging');
+    return;
+  }
   if (!drag) return;
   drag = null;
   overlay.classList.remove('dragging');

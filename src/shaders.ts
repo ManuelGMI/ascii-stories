@@ -19,14 +19,16 @@ uniform float u_gamma;
 uniform float u_time;       // s
 uniform float u_reveal;     // 0 off, 1 aleatorio, 2 escritura, 3 barrido →, 4 barrido ↓, 5 radial, 6 lluvia
 uniform float u_progress;   // 0..1 del revelado
-uniform float u_zoom;       // zoom de la imagen (pulso al ritmo)
+uniform float u_zoom;       // zoom de la imagen (encuadre × pulso al ritmo)
+uniform vec2  u_pan;        // desplazamiento de la imagen (fracción de la salida)
+uniform vec3  u_fill;       // color de lo que queda fuera de la imagen
 
 const float PI = 3.14159265;
 
 // Imagen "cover" dentro del lienzo de salida. px con origen arriba-izquierda.
 vec2 srcUV(vec2 px) {
   float s = max(u_res.x / u_srcSize.x, u_res.y / u_srcSize.y) * u_zoom;
-  return (px - 0.5 * u_res) / (u_srcSize * s) + 0.5;
+  return (px - 0.5 * u_res - u_pan * u_res) / (u_srcSize * s) + 0.5;
 }
 
 float lodForCell() {
@@ -44,7 +46,9 @@ vec3 grade(vec3 c) {
 }
 
 vec3 fetch(vec2 px, float lod) {
-  return grade(textureLod(u_src, srcUV(px), lod).rgb);
+  vec2 uv = srcUV(px);
+  if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return u_fill;
+  return grade(textureLod(u_src, uv, lod).rgb);
 }
 
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }

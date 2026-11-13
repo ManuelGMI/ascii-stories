@@ -48,6 +48,10 @@ export interface Params {
   pulseGlow: number; // destello (bloom y ganancia)
   pulseZoom: number; // zoom de la imagen
   pulseText: boolean; // el texto también late
+  // Encuadre de la imagen
+  imgZoom: number; // 1 = rellena el lienzo; <1 deja la imagen entera con bordes
+  imgX: number; // desplazamiento, como fracción del ancho de salida
+  imgY: number; // ídem del alto
 }
 
 export interface Anim {
@@ -103,6 +107,9 @@ export const DEFAULTS: Params = {
   pulseBright: 0.2,
   pulseGlow: 0.8,
   pulseZoom: 0.05,
+  imgZoom: 1,
+  imgX: 0,
+  imgY: 0,
   pulseText: false,
 };
 
@@ -376,7 +383,9 @@ export class Engine {
     a.f('u_edgeStrength', p.edgeStrength);
     a.f('u_edgeThreshold', p.edgeThreshold);
     a.f('u_brightness', p.brightness + (anim.level ?? 0) * p.pulseBright);
-    a.f('u_zoom', 1 + (anim.level ?? 0) * p.pulseZoom);
+    a.f('u_zoom', p.imgZoom * (1 + (anim.level ?? 0) * p.pulseZoom));
+    a.v2('u_pan', p.imgX, p.imgY);
+    a.v3('u_fill', hex(p.bgColor));
     a.f('u_contrast', p.contrast);
     a.f('u_saturation', p.saturation);
     a.f('u_gamma', p.gamma);
@@ -410,7 +419,9 @@ export class Engine {
       prog.v2('u_srcSize', this.rawW, this.rawH);
       prog.v2('u_cell', px, px);
       prog.f('u_brightness', p.brightness + (anim.level ?? 0) * p.pulseBright);
-      prog.f('u_zoom', 1 + (anim.level ?? 0) * p.pulseZoom);
+      prog.f('u_zoom', p.imgZoom * (1 + (anim.level ?? 0) * p.pulseZoom));
+      prog.v2('u_pan', p.imgX, p.imgY);
+      prog.v3('u_fill', hex(p.bgColor));
       prog.f('u_contrast', p.contrast);
       prog.f('u_saturation', p.saturation);
       prog.f('u_gamma', p.gamma);
